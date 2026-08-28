@@ -12,7 +12,7 @@
   :root{
     --bg:#181a20; --panel:#21242c; --panel-hi:#272b35;
     --grid-major:#545b68; --grid-minor:#353b46; --grid-sub:#272c35;
-    --text:#f3f4f6; --muted:#a7b0bb; --dim:#6f7885;
+    --text:#f3f4f6; --muted:#a7b0bb; --dim:#a0abb8;
     --accent:#6ea8fe; --playhead:#ff4d4f;
     --sheet:#1d2027; --line:#31363f;
     --gutter:64px;
@@ -81,9 +81,14 @@
             will-change: transform;}
   .hourline.major{border-top-color:var(--grid-major);}
   .hourline.sub{border-top-color:var(--grid-sub); border-top-style:dashed;}
-  .hourlabel{position:absolute; left:0; top:0; width:var(--gutter); text-align:center;
-             padding-right:0; font-size:12px; font-weight:650; color:var(--dim);
-             pointer-events:none; will-change: transform;}
+  
+  .hourlabel{
+    position:absolute; left:0; top:0; width:var(--gutter); text-align:center;
+    font-size:12.5px; font-weight:700; color:var(--dim);
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+    pointer-events:none; will-change: transform;
+  }
+
   #now{position:absolute; left:var(--gutter); right:0; height:2px;
        background:var(--playhead); pointer-events:none; z-index:6;}
   #now::before{content:''; position:absolute; left:-4px; top:-3px;
@@ -118,8 +123,25 @@
     color: #ffffff; text-shadow: 0 1px 3px rgba(0,0,0,0.8);
     z-index: 2; pointer-events: none;
   }
-  .t-sticky .t-title{font-weight:750; font-size:13px; line-height:1.25;
-                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  
+  @keyframes marquee {
+    0% { transform: translateX(0); }
+    30% { transform: translateX(0); }
+    80% { transform: translateX(var(--scroll-dist)); }
+    100% { transform: translateX(var(--scroll-dist)); }
+  }
+
+  .t-sticky .t-title-wrap {
+    overflow: hidden; white-space: nowrap; width: 100%; position: relative;
+  }
+  .t-sticky .t-title {
+    font-weight: 750; font-size: 13px; line-height: 1.25;
+    display: inline-block; white-space: nowrap;
+  }
+  .t-sticky .t-title.overflowing {
+    animation: marquee 6s linear infinite;
+  }
+
   .t-sticky .t-time{font-size:10.5px; opacity:.9; margin-top:1px; line-height:1.25;
                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .t-sticky .t-dur{font-size:10px; opacity:.85; line-height:1.25;
@@ -967,10 +989,25 @@ function drawTiles(){
     const sticky = document.createElement('div');
     sticky.className = 't-sticky';
 
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 't-title-wrap';
+
     const t = document.createElement('div');
     t.className = 't-title'; 
     t.textContent = ev.title;
-    sticky.appendChild(t);
+    titleWrap.appendChild(t);
+    sticky.appendChild(titleWrap);
+
+    // Check for overflow marquee effect after DOM injection
+    requestAnimationFrame(() => {
+      const overflowDist = t.scrollWidth - titleWrap.clientWidth;
+      if (overflowDist > 4) {
+        t.style.setProperty('--scroll-dist', `-${overflowDist + 12}px`);
+        t.classList.add('overflowing');
+      } else {
+        t.classList.remove('overflowing');
+      }
+    });
 
     const time = document.createElement('div');
     time.className = 't-time mono';
@@ -1061,6 +1098,19 @@ function updateTileDOM(i){
   el.style.left = left + 'px';
   el.style.width = laneW + 'px';
   el.classList.toggle('short', h < 34);
+
+  const titleEl = el.querySelector('.t-title');
+  const titleWrap = el.querySelector('.t-title-wrap');
+  if (titleEl && titleWrap) {
+    titleEl.textContent = ev.title;
+    const overflowDist = titleEl.scrollWidth - titleWrap.clientWidth;
+    if (overflowDist > 4) {
+      titleEl.style.setProperty('--scroll-dist', `-${overflowDist + 12}px`);
+      titleEl.classList.add('overflowing');
+    } else {
+      titleEl.classList.remove('overflowing');
+    }
+  }
 
   const timeEl = el.querySelector('.t-time');
   if (timeEl) timeEl.textContent = `${fmt(ev.start_min)} – ${fmt(ev.end_min)}`;
