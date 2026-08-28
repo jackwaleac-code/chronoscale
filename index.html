@@ -466,10 +466,9 @@
     <label for="fNotes">Notes</label>
     <textarea id="fNotes" placeholder="Anything worth remembering"></textarea>
   </div>
-  <button class="btn primary" id="btnDone">Close</button>
-  <button class="btn" id="btnOpenInside">Open inside</button>
   <button class="btn" id="btnDuplicate">Duplicate</button>
   <button class="btn danger" id="btnDelete">Delete tile</button>
+  <button class="btn primary" id="btnDone">Close</button>
 </div>
 
 <!-- all tiles in this view -->
@@ -680,7 +679,7 @@ function getEmbedMapUrl(loc) {
 }
 
 /* ============================================================
-   Notifications with Completion Prompt
+   Notifications with Working Completion Prompt (Service Worker / Direct Handling)
    ============================================================ */
 async function requestNotificationPermission() {
   if (!("Notification" in window)) {
@@ -723,9 +722,20 @@ function checkTaskAlerts() {
       notifiedEvents.add(key);
       try {
         const notif = new Notification(fmt(ev.start_min), {
-          body: `${ev.title} is starting. Did you complete it? (Tap to confirm)`,
+          body: `${ev.title} is starting. Tap here or window to complete!`,
           tag: key
         });
+        
+        // Immediate in-page fallback prompt so it always works reliably
+        setTimeout(() => {
+          if (confirm(`Did you complete "${ev.title}"?`)) {
+            ev.counter = (ev.counter || 0) + 1;
+            save();
+            render();
+            toast(`Completed! Counter increased to ${ev.counter}`);
+          }
+        }, 1000);
+
         notif.onclick = () => {
           window.focus();
           const completed = confirm(`Did you complete "${ev.title}"?`);
@@ -1847,7 +1857,6 @@ function openTile(i){
   document.getElementById('fNotes').value = noteText(ev.notes);
   refreshSteppers();
   buildSwatches(ev.color);
-  document.getElementById('btnOpenInside').textContent = 'Open inside';
   openSheet(sheetTile);
 }
 
@@ -1966,15 +1975,6 @@ document.querySelectorAll('[data-step]').forEach(btn => {
 });
 
 document.getElementById('btnDone').addEventListener('click', closeSheets);
-
-document.getElementById('btnOpenInside').addEventListener('click', () => {
-  if (editing === -1) return;
-  const i = editing;
-  commitEdits();
-  editing = -1;
-  closeSheets();
-  openChild(i);
-});
 
 document.getElementById('btnDelete').addEventListener('click', () => {
   if (editing === -1) return;
