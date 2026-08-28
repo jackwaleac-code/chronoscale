@@ -51,11 +51,31 @@
   }
   .iconbtn:active{background:var(--grid-minor);}
   .iconbtn[hidden]{display:none;}
+  .iconbtn.locked { color: var(--accent); background: rgba(110, 168, 254, 0.15); }
 
-  /* ---- timeline ---- */
+  /* ---- timeline container ---- */
+  #timeline-container{
+    flex:1; display:flex; flex-direction:column; position:relative; overflow:hidden;
+  }
   #scroll{flex:1; overflow-y:auto; overflow-x:hidden; position:relative;
           -webkit-overflow-scrolling:touch; touch-action:pan-y;}
   #canvas{position:relative; width:100%; touch-action:pan-y;}
+  
+  /* ---- minimap preview bar ---- */
+  #minimap{
+    position:absolute; right:12px; bottom:12px; width:44px; height:180px;
+    background:rgba(29, 32, 39, 0.85); border:1px solid var(--line);
+    border-radius:8px; z-index:15; overflow:hidden;
+    backdrop-filter:blur(6px); box-shadow:0 4px 16px rgba(0,0,0,0.5);
+    touch-action:none; display:flex; flex-direction:column;
+  }
+  #minimap-track{position:relative; width:100%; height:100%; flex:1;}
+  .minimap-tile{position:absolute; border-radius:1px; opacity:0.85;}
+  #minimap-viewport{
+    position:absolute; left:0; right:0; border:1px solid var(--accent);
+    background:rgba(110, 168, 254, 0.15); border-radius:3px; pointer-events:none;
+  }
+
   .hourline{position:absolute; left:0; top:0; right:0; height:0;
             border-top:1px solid var(--grid-minor); pointer-events:none;
             will-change: transform;}
@@ -77,36 +97,38 @@
   .tile{
     position:absolute; border-radius:8px; z-index:2;
     transition: transform 0.16s cubic-bezier(0.2, 0, 0, 1);
-    touch-action:pan-y;
+    touch-action:none;
   }
   .tile-bg{
     position:absolute; inset:0; border-radius:8px; overflow:hidden;
-    box-shadow:inset 0 0 0 1px rgba(0,0,0,.22);
+    opacity: 0.85; backdrop-filter: blur(4px);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.15);
     transition:box-shadow .12s, opacity .2s, filter .2s;
     z-index:1;
   }
-  .tile.past .tile-bg{opacity:0.5; filter:grayscale(40%);}
+  .tile.past .tile-bg{opacity:0.4; filter:grayscale(40%);}
   .tile.sel{z-index:5;}
-  .tile.sel .tile-bg{box-shadow:0 0 0 2px var(--text), 0 6px 16px rgba(0,0,0,.5);}
+  .tile.sel .tile-bg{box-shadow:0 0 0 2px var(--text), 0 6px 16px rgba(0,0,0,.5); opacity: 0.95;}
   
   .tile.drag{z-index:8; transform: scale(1.02); touch-action:none;}
-  .tile.drag .tile-bg { box-shadow: 0 12px 28px rgba(0,0,0,.65), inset 0 0 0 1px rgba(255,255,255,.2); filter: brightness(1.1); }
+  .tile.drag .tile-bg { box-shadow: 0 12px 28px rgba(0,0,0,.65), inset 0 0 0 1px rgba(255,255,255,.3); filter: brightness(1.1); opacity: 0.95; }
   
   .t-sticky {
     position: sticky; top: 0;
     padding: 5px 8px; max-height: 100%; overflow: hidden;
-    color: #10121a; z-index: 2; pointer-events: none;
+    color: #ffffff; text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+    z-index: 2; pointer-events: none;
   }
   .t-sticky .t-title{font-weight:650; font-size:13px; line-height:1.25;
                  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-  .t-sticky .t-time{font-size:10.5px; opacity:.72; margin-top:1px; line-height:1.25;
+  .t-sticky .t-time{font-size:10.5px; opacity:.85; margin-top:1px; line-height:1.25;
                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-  .t-sticky .t-dur{font-size:10px; opacity:.65; line-height:1.25;
+  .t-sticky .t-dur{font-size:10px; opacity:.75; line-height:1.25;
                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   
   .tile.short .t-sticky {padding-top:2px;}
   .tile.short .t-time, .tile.short .t-dur{display:none;}
-  .tile .badge{position:absolute; right:5px; top:5px; background:rgba(0,0,0,.32);
+  .tile .badge{position:absolute; right:5px; top:5px; background:rgba(0,0,0,.45);
                color:#fff; font-size:10px; font-weight:700; border-radius:999px;
                min-width:17px; height:17px; padding:0 5px;
                display:flex; align-items:center; justify-content:center; z-index:3;}
@@ -121,7 +143,7 @@
   .tile-map-link:active { transform: scale(1.2); opacity: 1; }
   
   .handle{
-    position:absolute; left:0; right:0; height:36px; z-index:10;
+    position:absolute; left:0; right:0; height:42px; z-index:10;
     display:flex; align-items:center; justify-content:center;
     cursor:ns-resize; touch-action:none;
   }
@@ -130,8 +152,8 @@
     background:var(--text); opacity:.95;
     box-shadow:0 0 0 1px rgba(0,0,0,.5), 0 2px 6px rgba(0,0,0,.4);
   }
-  .handle.top{top:-18px;} 
-  .handle.bot{bottom:-18px;}
+  .handle.top{top:-21px;} 
+  .handle.bot{bottom:-21px;}
 
   #bubble{position:absolute; z-index:12; background:#0f1116; color:var(--text);
           border:1px solid var(--grid-major); border-radius:7px;
@@ -289,14 +311,22 @@
     <div id="tplName">Default</div>
     <div id="topInfo">—</div>
   </div>
+  <button class="iconbtn" id="btnLockZoom" aria-label="Lock zoom" title="Lock zoom">🔒</button>
   <button class="iconbtn" id="btnSettings" aria-label="Settings" title="Settings">⚙️</button>
 </header>
 
-<div id="scroll">
-  <div id="canvas">
-    <div id="nowLabel" class="mono"></div>
-    <div id="now"></div>
-    <div id="bubble" class="mono"></div>
+<div id="timeline-container">
+  <div id="scroll">
+    <div id="canvas">
+      <div id="nowLabel" class="mono"></div>
+      <div id="now"></div>
+      <div id="bubble" class="mono"></div>
+    </div>
+  </div>
+  <div id="minimap">
+    <div id="minimap-track">
+      <div id="minimap-viewport"></div>
+    </div>
   </div>
 </div>
 
@@ -505,6 +535,7 @@ let selected = -1;
 let editing = -1;
 let lastTap = { time: 0, idx: -1 };
 let notifiedEvents = new Set();
+let zoomLocked = false;
 
 function minZoom(){
   const span = Math.max(1, dayEnd - dayStart);
@@ -993,7 +1024,7 @@ function rebuildHandles() {
     hd.dataset.i = selected;
     hd.style.left  = left + 'px';
     hd.style.width = laneW + 'px';
-    hd.style.top   = (side === 'top' ? top - 18 : top + h - 18) + 'px';
+    hd.style.top   = (side === 'top' ? top - 21 : top + h - 21) + 'px';
     canvas.appendChild(hd);
   });
 }
@@ -1055,8 +1086,45 @@ function updateTileDOM(i){
     hd.style.left = left + 'px';
     hd.style.width = laneW + 'px';
     const side = hd.dataset.handle;
-    hd.style.top = (side === 'top' ? top - 18 : top + h - 18) + 'px';
+    hd.style.top = (side === 'top' ? top - 21 : top + h - 21) + 'px';
   });
+}
+
+function updateMinimap(){
+  const track = document.getElementById('minimap-track');
+  const viewport = document.getElementById('minimap-viewport');
+  const minimapEl = document.getElementById('minimap');
+  if (!track || !viewport || !minimapEl) return;
+
+  track.querySelectorAll('.minimap-tile').forEach(n => n.remove());
+
+  const totalSpan = dayEnd - dayStart;
+  const minimapHeight = minimapEl.clientHeight;
+  const nLanes = laneCount();
+
+  events.forEach(ev => {
+    const topRatio = Math.max(0, (ev.start_min - dayStart) / totalSpan);
+    const heightRatio = Math.max(0.01, (ev.end_min - ev.start_min) / totalSpan);
+    const lane = ev.lane_bias | 0;
+    
+    const mTile = document.createElement('div');
+    mTile.className = 'minimap-tile';
+    mTile.style.top = (topRatio * minimapHeight) + 'px';
+    mTile.style.height = Math.max(3, heightRatio * minimapHeight) + 'px';
+    mTile.style.left = `${(lane / nLanes) * 100}%`;
+    mTile.style.width = `${(1 / nLanes) * 100}%`;
+    mTile.style.background = ev.color;
+    track.appendChild(mTile);
+  });
+
+  const scrollHeight = canvas.clientHeight;
+  const clientHeight = scrollEl.clientHeight;
+  const scrollTop = scrollEl.scrollTop;
+
+  const vpTop = (scrollTop / scrollHeight) * minimapHeight;
+  const vpHeight = (clientHeight / scrollHeight) * minimapHeight;
+  viewport.style.top = vpTop + 'px';
+  viewport.style.height = Math.max(16, vpHeight) + 'px';
 }
 
 function drawNow(){
@@ -1096,6 +1164,7 @@ function render(){
   drawTiles(); 
   drawNow(); 
   renderChrome();
+  updateMinimap();
 }
 
 let scrollRAF = null;
@@ -1103,14 +1172,69 @@ scrollEl.addEventListener('scroll', () => {
   if (scrollRAF) return;
   scrollRAF = requestAnimationFrame(() => {
     drawGrid();
+    updateMinimap();
     scrollRAF = null;
   });
 }, {passive: true});
 
 /* ============================================================
+   Zoom Lock Toggle Button
+   ============================================================ */
+const btnLockZoom = document.getElementById('btnLockZoom');
+btnLockZoom.addEventListener('click', () => {
+  zoomLocked = !zoomLocked;
+  btnLockZoom.classList.toggle('locked', zoomLocked);
+  btnLockZoom.textContent = zoomLocked ? '🔓' : '🔒';
+  toast(zoomLocked ? 'Zoom locked' : 'Zoom unlocked');
+});
+
+/* ============================================================
+   Minimap Interaction (Tap / Drag to jump scroll)
+   ============================================================ */
+const minimapEl = document.getElementById('minimap');
+let isMinimapDragging = false;
+
+function scrollToMinimapY(clientY){
+  const rect = minimapEl.getBoundingClientRect();
+  const clickY = Math.max(0, Math.min(rect.height, clientY - rect.top));
+  const ratio = clickY / rect.height;
+  const scrollHeight = canvas.clientHeight;
+  const clientHeight = scrollEl.clientHeight;
+  const targetScroll = ratio * scrollHeight - (clientHeight / 2);
+  const maxScroll = Math.max(0, scrollHeight - clientHeight);
+  scrollEl.scrollTop = Math.max(0, Math.min(maxScroll, targetScroll));
+}
+
+minimapEl.addEventListener('touchstart', e => {
+  isMinimapDragging = true;
+  if (e.cancelable) e.preventDefault();
+  scrollToMinimapY(e.touches[0].clientY);
+}, { passive: false });
+
+window.addEventListener('touchmove', e => {
+  if (!isMinimapDragging) return;
+  if (e.cancelable) e.preventDefault();
+  scrollToMinimapY(e.touches[0].clientY);
+}, { passive: false });
+
+window.addEventListener('touchend', () => { isMinimapDragging = false; }, { passive: true });
+window.addEventListener('touchcancel', () => { isMinimapDragging = false; }, { passive: true });
+
+minimapEl.addEventListener('mousedown', e => {
+  isMinimapDragging = true;
+  scrollToMinimapY(e.clientY);
+});
+window.addEventListener('mousemove', e => {
+  if (!isMinimapDragging) return;
+  scrollToMinimapY(e.clientY);
+});
+window.addEventListener('mouseup', () => { isMinimapDragging = false; });
+
+/* ============================================================
    Touch: Pinch to zoom
    ============================================================ */
 function zoomTo(next, anchorMin, offsetPx){
+  if (zoomLocked) return;
   const clamped = Math.max(minZoom(), Math.min(ZOOM_MAX, next));
   if (Math.abs(clamped - pxPerMin) < 0.0005) return;
   pxPerMin = clamped;
@@ -1130,7 +1254,7 @@ function touchDist(e){
 }
 
 window.addEventListener('touchstart', e => {
-  if (e.touches.length >= 2){
+  if (!zoomLocked && e.touches.length >= 2){
     if (e.cancelable) e.preventDefault();
     clearTimeout(longPressTimer);
     clearTimeout(tileEditTimer);
@@ -1154,7 +1278,7 @@ window.addEventListener('touchstart', e => {
 }, {passive:false, capture:true});
 
 window.addEventListener('touchmove', e => {
-  if (e.touches && e.touches.length >= 2){
+  if (!zoomLocked && e.touches && e.touches.length >= 2){
     if (e.cancelable) e.preventDefault();
     if (!pinch0){
       const offset = touchMidY(e) - scrollEl.getBoundingClientRect().top;
@@ -1345,7 +1469,16 @@ function onDown(e){
   drag.step = Math.max(1, g.laneW + g.gap);
 
   if (handle) {
-    if (drag.el) drag.el.classList.add('drag');
+    drag.pendingActive = true;
+    drag.active = false;
+    setTimeout(() => {
+      if (drag && drag.pendingActive) {
+        drag.active = true;
+        drag.pendingActive = false;
+        if (drag.el) drag.el.classList.add('drag');
+        vibrate(15);
+      }
+    }, 200);
   } else {
     longPressTimer = setTimeout(() => {
       if (drag && !drag.active) {
@@ -1397,6 +1530,12 @@ function onMove(e){
 
   if (Math.hypot(dx, dy) > 6) {
     clearTimeout(tileEditTimer);
+  }
+
+  if (drag.pendingActive && Math.hypot(dx, dy) > 8) {
+    drag.pendingActive = false;
+    drag = null;
+    return;
   }
 
   if (!drag.active) {
@@ -1509,57 +1648,40 @@ scrollEl.addEventListener('click', e => {
 });
 
 /* ============================================================
-   Swipe Gestures: Edge Swipe to Open List & Pull Down to Close Sheets
+   Swipe Gestures: Edge Swipe & Slide Down to Close
    ============================================================ */
-let edgeSwipe = null;
+let globalTouch = null;
 window.addEventListener('touchstart', e => {
   if (e.touches.length !== 1) return;
-  const touch = e.touches[0];
-  const anySheetOpen = document.querySelector('.sheet.on, .drawer.on');
-  if (!anySheetOpen && touch.clientX <= 32) {
-    edgeSwipe = { startX: touch.clientX, startY: touch.clientY };
-  }
+  const t = e.touches[0];
+  globalTouch = { x: t.clientX, y: t.clientY, time: Date.now() };
 }, { passive: true });
 
 window.addEventListener('touchmove', e => {
-  if (!edgeSwipe || e.touches.length !== 1) return;
-  const touch = e.touches[0];
-  const dx = touch.clientX - edgeSwipe.startX;
-  const dy = touch.clientY - edgeSwipe.startY;
-  if (dx > 45 && Math.abs(dy) < 35) {
-    edgeSwipe = null;
+  if (!globalTouch || e.touches.length !== 1) return;
+  const t = e.touches[0];
+  const dx = t.clientX - globalTouch.x;
+  const dy = t.clientY - globalTouch.y;
+
+  const anyOpen = document.querySelector('.sheet.on, .drawer.on');
+  if (!anyOpen && globalTouch.x <= 40 && dx > 50 && Math.abs(dy) < 40) {
+    globalTouch = null;
     openList();
   }
 }, { passive: true });
 
-window.addEventListener('touchend', () => { edgeSwipe = null; }, { passive: true });
+window.addEventListener('touchend', e => {
+  if (!globalTouch) return;
+  const t = e.changedTouches[0];
+  const dy = t.clientY - globalTouch.y;
+  const dx = t.clientX - globalTouch.x;
 
-// Attach pull-down to close on all modal sheets
-[sheetTile, sheetSettings, sheetAuth, sheetTpl].forEach(sheet => {
-  let pullDown = null;
-  sheet.addEventListener('touchstart', e => {
-    if (e.touches.length !== 1) return;
-    const touch = e.touches[0];
-    const target = e.target;
-    // Allow dragging down from grip, header area, or when sheet is scrolled to top
-    if (target.closest('.grip') || target.closest('h2') || sheet.scrollTop <= 0) {
-      pullDown = { startY: touch.clientY, startX: touch.clientX };
-    }
-  }, { passive: true });
-
-  sheet.addEventListener('touchmove', e => {
-    if (!pullDown || e.touches.length !== 1) return;
-    const touch = e.touches[0];
-    const dy = touch.clientY - pullDown.startY;
-    const dx = touch.clientX - pullDown.startX;
-    if (dy > 65 && Math.abs(dx) < 45) {
-      pullDown = null;
-      closeSheets();
-    }
-  }, { passive: true });
-
-  sheet.addEventListener('touchend', () => { pullDown = null; }, { passive: true });
-});
+  const activeSheet = document.querySelector('.sheet.on');
+  if (activeSheet && dy > 80 && Math.abs(dx) < 60) {
+    closeSheets();
+  }
+  globalTouch = null;
+}, { passive: true });
 
 /* ============================================================
    Sheets
