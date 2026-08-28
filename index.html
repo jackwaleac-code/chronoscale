@@ -679,7 +679,7 @@ function getEmbedMapUrl(loc) {
 }
 
 /* ============================================================
-   Notifications with Completion Prompt
+   Notifications
    ============================================================ */
 async function requestNotificationPermission() {
   if (!("Notification" in window)) {
@@ -1578,14 +1578,14 @@ function onDown(e){
       }
     }, 200);
   } else {
-    // Enable long press to activate moving/dragging immediately
+    // Quick hold or immediate drag activation
     longPressTimer = setTimeout(() => {
       if (drag && !drag.active) {
         drag.active = true;
         if (drag.el) drag.el.classList.add('drag');
         vibrate(15);
       }
-    }, 250);
+    }, 180);
 
     tileEditTimer = setTimeout(() => {
       if (drag && !drag.moved && !drag.active) {
@@ -1594,7 +1594,7 @@ function onDown(e){
         drag = null;
         openTile(i);
       }
-    }, 600);
+    }, 550);
   }
 }
 
@@ -1621,21 +1621,21 @@ function onMove(e){
   const dy = pt.clientY - drag.y0;
   const dx = pt.clientX - drag.x0;
 
-  if (Math.hypot(dx, dy) > 6) {
+  if (Math.hypot(dx, dy) > 5) {
     clearTimeout(tileEditTimer);
   }
 
-  if (drag.pendingActive && Math.hypot(dx, dy) > 8) {
+  if (drag.pendingActive && Math.hypot(dx, dy) > 6) {
     drag.pendingActive = false;
-    drag.active = true; // Activate immediately on movement for handles
+    drag.active = true;
     if (drag.el) drag.el.classList.add('drag');
   }
 
   if (!drag.active) {
-    if (Math.hypot(dx, dy) > 10) {
+    if (Math.hypot(dx, dy) > 8) {
       clearTimeout(longPressTimer);
       clearTimeout(tileEditTimer);
-      drag.active = true; // Instantly activate drag if user moves finger after touching tile
+      drag.active = true;
       if (drag.el) drag.el.classList.add('drag');
     } else {
       return;
@@ -1645,7 +1645,7 @@ function onMove(e){
   if (e.cancelable) e.preventDefault();
 
   if (!drag.moved){
-    if (Math.abs(dy) < 3 && Math.abs(dx) < 3 && drag.mode !== 'move') return;
+    if (Math.abs(dy) < 2 && Math.abs(dx) < 2 && drag.mode !== 'move') return;
     drag.moved = true;
     clearTimeout(tileEditTimer);
   }
@@ -1884,6 +1884,15 @@ document.getElementById('btnTestLocation').addEventListener('click', () => {
   if (val) window.open(getMapsUrl(val), '_blank');
 });
 
+// Auto confirm and exit menu when pressing Enter on the title input
+document.getElementById('fTitle').addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    commitEdits();
+    closeSheets();
+  }
+});
+
 function refreshSteppers(){
   if (editing === -1) return;
   const ev = events[editing];
@@ -1992,7 +2001,7 @@ document.getElementById('btnDuplicate').addEventListener('click', () => {
   const copy = normalise(JSON.parse(JSON.stringify(src)));
   copy.lane_bias = firstFreeLane(copy.start_min, copy.end_min, -1);
   if (laneBlocked(copy.start_min, copy.end_min, copy.lane_bias, -1)){
-    copy.start_min = Math.min(dayEnd - dur, copy.end_min);
+    copy.start_min = Math.min(dayEnd - dur, copy.start_min);
     copy.end_min = copy.start_min + dur;
   }
   events.push(copy);
@@ -2478,7 +2487,7 @@ document.addEventListener('visibilitychange', () => {
 
 /* ---------- toast ---------- */
 let toastTimer = null;
-let toast(msg){
+function toast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('on');
   clearTimeout(toastTimer);
