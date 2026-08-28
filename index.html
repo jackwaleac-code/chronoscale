@@ -679,7 +679,7 @@ function getEmbedMapUrl(loc) {
 }
 
 /* ============================================================
-   Notifications with Working Completion Prompt (Service Worker / Direct Handling)
+   Notifications with Completion Prompt
    ============================================================ */
 async function requestNotificationPermission() {
   if (!("Notification" in window)) {
@@ -726,7 +726,6 @@ function checkTaskAlerts() {
           tag: key
         });
         
-        // Immediate in-page fallback prompt so it always works reliably
         setTimeout(() => {
           if (confirm(`Did you complete "${ev.title}"?`)) {
             ev.counter = (ev.counter || 0) + 1;
@@ -1579,16 +1578,17 @@ function onDown(e){
       }
     }, 200);
   } else {
+    // Enable long press to activate moving/dragging immediately
     longPressTimer = setTimeout(() => {
       if (drag && !drag.active) {
         drag.active = true;
         if (drag.el) drag.el.classList.add('drag');
         vibrate(15);
       }
-    }, 220);
+    }, 250);
 
     tileEditTimer = setTimeout(() => {
-      if (drag && !drag.moved) {
+      if (drag && !drag.moved && !drag.active) {
         vibrate(25);
         if (drag.el) drag.el.classList.remove('drag');
         drag = null;
@@ -1627,17 +1627,19 @@ function onMove(e){
 
   if (drag.pendingActive && Math.hypot(dx, dy) > 8) {
     drag.pendingActive = false;
-    drag = null;
-    return;
+    drag.active = true; // Activate immediately on movement for handles
+    if (drag.el) drag.el.classList.add('drag');
   }
 
   if (!drag.active) {
     if (Math.hypot(dx, dy) > 10) {
       clearTimeout(longPressTimer);
       clearTimeout(tileEditTimer);
-      drag = null; 
+      drag.active = true; // Instantly activate drag if user moves finger after touching tile
+      if (drag.el) drag.el.classList.add('drag');
+    } else {
+      return;
     }
-    return;
   }
 
   if (e.cancelable) e.preventDefault();
@@ -1675,7 +1677,7 @@ function onMove(e){
     updateTileDOM(drag.i);
     showBubble(`${fmt(ev.start_min)} · ${fmtDur(ev.end_min - ev.start_min)}`, yOf(ev.start_min) - 30, ev.lane_bias|0);
   } else {
-    ev.end_min = clampResizeBottom(editing, snap(drag.e0 + deltaMin, step));
+    ev.end_min = clampResizeBottom(drag.i, snap(drag.e0 + deltaMin, step));
     updateTileDOM(drag.i);
     showBubble(`${fmt(ev.end_min)} · ${fmtDur(ev.end_min - ev.start_min)}`, yOf(ev.end_min) + 8, ev.lane_bias|0);
   }
@@ -2067,14 +2069,6 @@ function buildTileList(){
     counterWrap.appendChild(lbl);
     counterWrap.appendChild(btnUp);
 
-    const open = document.createElement('button');
-    open.className = 'trowbtn'; open.textContent = '›';
-    open.setAttribute('aria-label', 'Open inside ' + ev.title);
-    open.addEventListener('click', e => {
-      e.stopPropagation();
-      closeSheets(); openChild(i);
-    });
-
     const del = document.createElement('button');
     del.className = 'trowbtn danger'; del.textContent = '✕';
     del.setAttribute('aria-label', 'Delete ' + ev.title);
@@ -2094,7 +2088,6 @@ function buildTileList(){
     row.appendChild(dot); 
     row.appendChild(mid);
     row.appendChild(counterWrap);
-    row.appendChild(open); 
     row.appendChild(del);
     row.addEventListener('click', () => { closeSheets(); openTile(i); });
     box.appendChild(row);
@@ -2485,7 +2478,7 @@ document.addEventListener('visibilitychange', () => {
 
 /* ---------- toast ---------- */
 let toastTimer = null;
-function toast(msg){
+let toast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('on');
   clearTimeout(toastTimer);
