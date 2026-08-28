@@ -70,7 +70,7 @@
     touch-action:none; display:flex; flex-direction:column;
   }
   #minimap-track{position:relative; width:100%; height:100%; flex:1;}
-  .minimap-tile{position:absolute; border-radius:1px; opacity:0.85;}
+  .minimap-tile{position:absolute; border-radius:1px; opacity:0.65;}
   #minimap-viewport{
     position:absolute; left:0; right:0; border:1px solid var(--accent);
     background:rgba(110, 168, 254, 0.15); border-radius:3px; pointer-events:none;
@@ -101,29 +101,28 @@
   }
   .tile-bg{
     position:absolute; inset:0; border-radius:8px; overflow:hidden;
-    opacity: 0.85; backdrop-filter: blur(4px);
-    box-shadow:inset 0 0 0 1px rgba(255,255,255,.15);
+    opacity: 0.35; backdrop-filter: blur(8px);
     transition:box-shadow .12s, opacity .2s, filter .2s;
     z-index:1;
   }
-  .tile.past .tile-bg{opacity:0.4; filter:grayscale(40%);}
+  .tile.past .tile-bg{opacity:0.15; filter:grayscale(40%);}
   .tile.sel{z-index:5;}
-  .tile.sel .tile-bg{box-shadow:0 0 0 2px var(--text), 0 6px 16px rgba(0,0,0,.5); opacity: 0.95;}
+  .tile.sel .tile-bg{box-shadow:0 0 0 2px var(--text), 0 6px 16px rgba(0,0,0,.5); opacity: 0.55;}
   
   .tile.drag{z-index:8; transform: scale(1.02); touch-action:none;}
-  .tile.drag .tile-bg { box-shadow: 0 12px 28px rgba(0,0,0,.65), inset 0 0 0 1px rgba(255,255,255,.3); filter: brightness(1.1); opacity: 0.95; }
+  .tile.drag .tile-bg { box-shadow: 0 12px 28px rgba(0,0,0,.65); filter: brightness(1.1); opacity: 0.55; }
   
   .t-sticky {
     position: sticky; top: 0;
     padding: 5px 8px; max-height: 100%; overflow: hidden;
-    color: #ffffff; text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+    color: #ffffff; text-shadow: 0 1px 3px rgba(0,0,0,0.8);
     z-index: 2; pointer-events: none;
   }
-  .t-sticky .t-title{font-weight:650; font-size:13px; line-height:1.25;
+  .t-sticky .t-title{font-weight:750; font-size:13px; line-height:1.25;
                  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-  .t-sticky .t-time{font-size:10.5px; opacity:.85; margin-top:1px; line-height:1.25;
+  .t-sticky .t-time{font-size:10.5px; opacity:.9; margin-top:1px; line-height:1.25;
                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-  .t-sticky .t-dur{font-size:10px; opacity:.75; line-height:1.25;
+  .t-sticky .t-dur{font-size:10px; opacity:.85; line-height:1.25;
                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   
   .tile.short .t-sticky {padding-top:2px;}
@@ -505,6 +504,15 @@ const LS_KEY = 'chronoscale.v1';
 const PALETTE = ['#6ea8fe','#b35d5d','#c68642','#b7a13d','#5fa79f','#5d79c7',
                  '#d96b8a','#e08a4e','#9ecf63','#63b77a','#63bcd6','#9a72d8',
                  '#d06ac9','#f2f2f2','#a7b0bb'];
+
+// Helper to darken hex color for borders
+function darkenColor(hex, percent) {
+  let num = parseInt(hex.replace('#',''), 16);
+  let r = (num >> 16) * (1 - percent / 100);
+  let g = ((num >> 8) & 0x00FF) * (1 - percent / 100);
+  let b = (num & 0x0000FF) * (1 - percent / 100);
+  return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+}
 
 /* ---------- storage ---------- */
 const Store = (() => {
@@ -941,6 +949,7 @@ function drawTiles(){
     const bg = document.createElement('div');
     bg.className = 'tile-bg';
     bg.style.background = ev.color;
+    bg.style.border = `1px solid ${darkenColor(ev.color, 35)}`;
     
     if (currentMin > ev.start_min) {
       const dur = ev.end_min - ev.start_min;
@@ -1891,7 +1900,7 @@ document.getElementById('btnDuplicate').addEventListener('click', () => {
 });
 
 /* ============================================================
-   Tile list
+   Tile list (Sorted by Start Time)
    ============================================================ */
 const sheetList = document.getElementById('sheetList');
 
@@ -1909,8 +1918,7 @@ function buildTileList(){
     return;
   }
   events.map((ev,i) => ({ev,i}))
-        .sort((a,b) => a.ev.start_min - b.ev.start_min ||
-                       (a.ev.lane_bias|0) - (b.ev.lane_bias|0))
+        .sort((a,b) => a.ev.start_min - b.ev.start_min || a.ev.end_min - b.ev.end_min || ((a.ev.lane_bias|0) - (b.ev.lane_bias|0)))
         .forEach(({ev,i}) => {
     const row = document.createElement('div');
     row.className = 'trow';
