@@ -1,0 +1,2256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#181a20">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Chronoscale">
+<title>Chronoscale</title>
+<style>
+  :root{
+    --bg:#181a20; --panel:#21242c; --panel-hi:#272b35;
+    --grid-major:#545b68; --grid-minor:#353b46; --grid-sub:#272c35;
+    --text:#f3f4f6; --muted:#a7b0bb; --dim:#6f7885;
+    --accent:#6ea8fe; --playhead:#ff4d4f;
+    --sheet:#1d2027; --line:#31363f;
+    --gutter:64px;
+    --top-pad:16px;
+    --safe-b:env(safe-area-inset-b, 0px);
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%; margin:0; overscroll-behavior:none;}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-size:15px; line-height:1.4;
+    display:flex; flex-direction:column;
+    padding-top:env(safe-area-inset-top,0px);
+    -webkit-user-select:none; user-select:none;
+    touch-action: pan-y;
+  }
+  .mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+        font-variant-numeric:tabular-nums; letter-spacing:-.02em;}
+
+  /* ---- top bar ---- */
+  header{
+    display:flex; align-items:center; gap:10px;
+    padding:10px 12px; background:var(--panel);
+    border-bottom:1px solid var(--line); flex:none;
+  }
+  #tplName{font-weight:700; font-size:15px;
+           overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  #topInfo{color:var(--muted); font-size:12px;
+           overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  header .grow{flex:1; min-width:0;}
+  .iconbtn{
+    background:var(--panel-hi); color:var(--text); border:none; border-radius:9px;
+    width:38px; height:38px; font-size:17px; flex:none; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .iconbtn:active{background:var(--grid-minor);}
+  .iconbtn[hidden]{display:none;}
+
+  /* ---- timeline ---- */
+  #scroll{flex:1; overflow-y:auto; overflow-x:hidden; position:relative;
+          -webkit-overflow-scrolling:touch; touch-action:pan-y;}
+  #canvas{position:relative; width:100%; touch-action:pan-y;}
+  .hourline{position:absolute; left:0; top:0; right:0; height:0;
+            border-top:1px solid var(--grid-minor); pointer-events:none;
+            will-change: transform;}
+  .hourline.major{border-top-color:var(--grid-major);}
+  .hourline.sub{border-top-color:var(--grid-sub); border-top-style:dashed;}
+  .hourlabel{position:absolute; left:0; top:0; width:var(--gutter); text-align:center;
+             padding-right:0; font-size:12px; font-weight:650; color:var(--dim);
+             pointer-events:none; will-change: transform;}
+  #now{position:absolute; left:var(--gutter); right:0; height:2px;
+       background:var(--playhead); pointer-events:none; z-index:6;}
+  #now::before{content:''; position:absolute; left:-4px; top:-3px;
+               width:8px; height:8px; border-radius:50%; background:var(--playhead);}
+  #nowLabel{position:absolute; left:2px; font-size:10px; font-weight:700;
+            color:#fff; background:var(--playhead); border-radius:4px;
+            padding:1px 4px; transform:translateY(-50%); z-index:7;
+            pointer-events:none;}
+
+  /* --- structural tiles --- */
+  .tile{
+    position:absolute; border-radius:8px; z-index:2;
+    transition: transform 0.16s cubic-bezier(0.2, 0, 0, 1);
+    touch-action:pan-y;
+  }
+  .tile-bg{
+    position:absolute; inset:0; border-radius:8px; overflow:hidden;
+    box-shadow:inset 0 0 0 1px rgba(0,0,0,.22);
+    transition:box-shadow .12s, opacity .2s, filter .2s;
+    z-index:1;
+  }
+  .tile.past .tile-bg{opacity:0.5; filter:grayscale(40%);}
+  .tile.sel{z-index:5;}
+  .tile.sel .tile-bg{box-shadow:0 0 0 2px var(--text), 0 6px 16px rgba(0,0,0,.5);}
+  
+  .tile.drag{z-index:8; transform: scale(1.02); touch-action:none;}
+  .tile.drag .tile-bg { box-shadow: 0 12px 28px rgba(0,0,0,.65), inset 0 0 0 1px rgba(255,255,255,.2); filter: brightness(1.1); }
+  
+  .t-sticky {
+    position: sticky; top: 0;
+    padding: 5px 8px; max-height: 100%; overflow: hidden;
+    color: #10121a; z-index: 2; pointer-events: none;
+  }
+  .t-sticky .t-title{font-weight:650; font-size:13px; line-height:1.25;
+                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .t-sticky .t-time{font-size:10.5px; opacity:.72; margin-top:1px; line-height:1.25;
+                overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .t-sticky .t-dur{font-size:10px; opacity:.65; line-height:1.25;
+                overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  
+  .tile.short .t-sticky {padding-top:2px;}
+  .tile.short .t-time, .tile.short .t-dur{display:none;}
+  .tile .badge{position:absolute; right:5px; top:5px; background:rgba(0,0,0,.32);
+               color:#fff; font-size:10px; font-weight:700; border-radius:999px;
+               min-width:17px; height:17px; padding:0 5px;
+               display:flex; align-items:center; justify-content:center; z-index:3;}
+  .tile .corner{position:absolute; right:0; bottom:0; width:0; height:0;
+                border-style:solid; border-width:0 0 14px 14px;
+                border-color:transparent transparent rgba(0,0,0,.42) transparent; z-index:3;}
+
+  .tile-map-link {
+    position: absolute; right: 6px; bottom: 5px; font-size: 13px; z-index: 4;
+    text-decoration: none; line-height: 1; pointer-events: auto; opacity: 0.85;
+  }
+  .tile-map-link:active { transform: scale(1.2); opacity: 1; }
+  
+  .handle{
+    position:absolute; left:0; right:0; height:36px; z-index:10;
+    display:flex; align-items:center; justify-content:center;
+    cursor:ns-resize; touch-action:none;
+  }
+  .handle::after{
+    content:''; width:38px; height:4px; border-radius:2px;
+    background:var(--text); opacity:.95;
+    box-shadow:0 0 0 1px rgba(0,0,0,.5), 0 2px 6px rgba(0,0,0,.4);
+  }
+  .handle.top{top:-18px;} 
+  .handle.bot{bottom:-18px;}
+
+  #bubble{position:absolute; z-index:12; background:#0f1116; color:var(--text);
+          border:1px solid var(--grid-major); border-radius:7px;
+          padding:3px 8px; font-size:12px; font-weight:700;
+          pointer-events:none; display:none; white-space:nowrap;}
+
+  /* ---- sheets ---- */
+  .scrim{position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:20;
+         opacity:0; pointer-events:none; transition:opacity .18s;}
+  .scrim.on{opacity:1; pointer-events:auto;}
+  .sheet{
+    position:fixed; left:0; right:0; bottom:0; z-index:21;
+    background:var(--sheet); border-radius:16px 16px 0 0;
+    border-top:1px solid var(--line);
+    padding:6px 16px calc(16px + env(safe-area-inset-bottom,0px));
+    transform:translateY(101%); transition:transform .22s cubic-bezier(.32,.72,0,1);
+    max-height:88vh; overflow-y:auto;
+  }
+  .sheet.on{transform:translateY(0);}
+  .grip{width:36px; height:4px; border-radius:2px; background:var(--grid-major);
+        margin:6px auto 12px;}
+  .sheet h2{margin:0 0 14px; font-size:16px; font-weight:700;}
+  .field{margin-bottom:14px;}
+  .field label{display:block; font-size:11px; color:var(--muted);
+               text-transform:uppercase; letter-spacing:.06em; margin-bottom:6px;}
+  input[type=text],input[type=number],textarea{
+    width:100%; background:var(--bg); color:var(--text);
+    border:1px solid var(--grid-minor); border-radius:9px;
+    padding:11px 12px; font-size:16px; font-family:inherit;
+  }
+  textarea{min-height:76px; resize:vertical; line-height:1.45;}
+  input:focus,textarea:focus{outline:none; border-color:var(--accent);}
+  .row{display:flex; gap:10px;}
+  .row>*{flex:1; min-width:0;}
+
+  .stepper{display:flex; align-items:center; gap:8px;
+           background:var(--bg); border:1px solid var(--grid-minor);
+           border-radius:9px; padding:5px;}
+  .stepper button{flex:none; width:38px; height:36px; border:none; border-radius:7px;
+                  background:var(--panel-hi); color:var(--text);
+                  font-size:19px; cursor:pointer;}
+  .stepper button:active{background:var(--grid-minor);}
+  .stepper .val{flex:1; text-align:center; font-size:15px; font-weight:700;}
+  
+  .stepper input.time-input {
+    flex: 1; text-align: center; font-size: 15px; font-weight: 700;
+    background: transparent; border: none; color: var(--text);
+    font-family: inherit; margin: 0; padding: 0; outline: none;
+    -webkit-appearance: none; appearance: none; width: 100%; box-shadow: none;
+  }
+  .stepper input.time-input::-webkit-calendar-picker-indicator { display: none; }
+  .stepper input.time-input::-webkit-clear-button { display: none; }
+
+  .map-container {
+    width: 100%; height: 160px; border-radius: 9px; overflow: hidden;
+    margin-top: 8px; border: 1px solid var(--grid-minor); display: none;
+  }
+  .map-container iframe { width: 100%; height: 100%; border: 0; }
+
+  .swatches{display:flex; flex-wrap:wrap; gap:9px;}
+  .sw{width:34px; height:34px; border-radius:8px; cursor:pointer;
+      box-shadow:inset 0 0 0 1px rgba(0,0,0,.3);}
+  .sw.on{box-shadow:0 0 0 2px var(--text), inset 0 0 0 1px rgba(0,0,0,.3);}
+
+  .btn{display:block; width:100%; text-align:center; border:none; border-radius:10px;
+       padding:13px; font-size:15px; font-weight:650; cursor:pointer;
+       background:var(--panel-hi); color:var(--text); margin-bottom:9px;
+       font-family:inherit;}
+  .btn:active{filter:brightness(1.25);}
+  .btn.primary{background:var(--accent); color:#10121a;}
+  .btn.danger{background:#3a2226; color:#ff8a8a;}
+  .btn:disabled{opacity:.4;}
+
+  /* Google Sign In Custom Button Styling */
+  .google-signin-btn {
+    display: flex; align-items: center; justify-content: center; gap: 12px;
+    background: #ffffff; color: #3c4043; border: 1px solid #dadce0; border-radius: 9px;
+    padding: 12px; font-size: 15px; font-weight: 500; cursor: pointer; width: 100%;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 12px;
+  }
+  .google-signin-btn:active { background: #f1f3f4; }
+  .google-signin-btn img { width: 18px; height: 18px; }
+
+  /* ---- left drawer (tile list) ---- */
+  .drawer{
+    position:fixed; top:0; bottom:0; left:0; z-index:22;
+    width:min(84vw, 340px);
+    background:var(--sheet); border-right:1px solid var(--line);
+    box-shadow:6px 0 24px rgba(0,0,0,.45);
+    transform:translateX(-101%);
+    transition:transform .24s cubic-bezier(.32,.72,0,1);
+    display:flex; flex-direction:column;
+    padding-top:env(safe-area-inset-top,0px);
+  }
+  .drawer.on{transform:translateX(0);}
+  .drawer-head{
+    display:flex; align-items:flex-start; gap:10px; flex:none;
+    padding:16px 14px 12px; border-bottom:1px solid var(--line);
+  }
+  .drawer-head h2{margin:0; font-size:16px; font-weight:700;
+                  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .drawer-head>div:first-child{flex:1; min-width:0;}
+  .drawer-sub{font-size:11px; color:var(--muted); margin-top:3px;}
+  .drawer-body{flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
+               padding:12px 12px calc(16px + env(safe-area-inset-bottom,0px));}
+
+  .trow{display:flex; align-items:center; gap:8px; padding:11px 10px;
+        border-radius:10px; background:var(--bg); margin-bottom:8px; cursor:pointer;}
+  .trow:active{background:var(--panel-hi);}
+  .tdot{width:5px; align-self:stretch; min-height:34px; border-radius:3px; flex:none;}
+  .tmid{flex:1; min-width:0;}
+  .tname{font-weight:600; font-size:14px;
+         overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .tsub{font-size:11px; color:var(--muted); margin-top:2px;
+        overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .trowbtn{flex:none; width:34px; height:34px; border:none; border-radius:8px;
+           background:var(--panel-hi); color:var(--text); font-size:16px; cursor:pointer;
+           display:flex; align-items:center; justify-content:center;}
+  .trowbtn.danger{color:#ff8a8a;}
+  .trowbtn:active{filter:brightness(1.3);}
+
+  .tcounter-wrap {
+    display: flex; align-items: center; background: var(--panel-hi);
+    border-radius: 8px; padding: 2px; flex: none; gap: 2px;
+  }
+  .tcounter-wrap .iconbtn-small {
+    width: 26px; height: 26px; border: none; border-radius: 6px;
+    background: transparent; color: var(--text); font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+  .tcounter-wrap .iconbtn-small:active { background: var(--grid-minor); }
+  .tcounter-lbl {
+    min-width: 16px; text-align: center; font-size: 12px; font-weight: 700; color: var(--accent);
+  }
+
+  .tpl{display:flex; align-items:center; gap:10px; padding:13px 12px;
+       border-radius:10px; background:var(--bg); margin-bottom:8px; cursor:pointer;}
+  .tpl.on{box-shadow:inset 0 0 0 1.5px var(--accent);}
+  .tpl .dot{width:8px; height:8px; border-radius:50%; background:var(--accent);
+            flex:none; visibility:hidden;}
+  .tpl.on .dot{visibility:visible;}
+  .tpl .nm{flex:1; font-weight:600; overflow:hidden;
+           text-overflow:ellipsis; white-space:nowrap;}
+  .tpl .ct{font-size:11px; color:var(--muted);}
+  .divider{height:1px; background:var(--line); margin:14px 0;}
+  .hint{font-size:12px; color:var(--muted); line-height:1.5; margin:0 0 12px;}
+  .empty{text-align:center; color:var(--muted); font-size:13px; padding:28px 10px;}
+
+  #toast{position:fixed; left:50%; bottom:82px; transform:translateX(-50%) translateY(10px);
+         background:#0f1116; border:1px solid var(--grid-major); color:var(--text);
+         padding:9px 15px; border-radius:9px; font-size:13px; z-index:40;
+         opacity:0; pointer-events:none; transition:all .2s; max-width:86vw;}
+  #toast.on{opacity:1; transform:translateX(-50%) translateY(0);}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none !important;}}
+</style>
+</head>
+<body>
+
+<header>
+  <button class="iconbtn" id="btnList" aria-label="All tiles">≣</button>
+  <button class="iconbtn" id="btnBack" aria-label="Back to parent" hidden>‹</button>
+  <div class="grow">
+    <div id="tplName">Default</div>
+    <div id="topInfo">—</div>
+  </div>
+  <button class="iconbtn" id="btnSettings" aria-label="Settings" title="Settings">⚙️</button>
+</header>
+
+<div id="scroll">
+  <div id="canvas">
+    <div id="nowLabel" class="mono"></div>
+    <div id="now"></div>
+    <div id="bubble" class="mono"></div>
+  </div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+
+<!-- settings sheet -->
+<div class="sheet" id="sheetSettings">
+  <div class="grip"></div>
+  <h2>Settings</h2>
+  <button class="btn" id="btnEnableNotifications">Enable start notifications</button>
+  <button class="btn" id="btnOpenAuth">Cloud sync</button>
+  <button class="btn" id="btnOpenTemplates">Templates</button>
+</div>
+
+<!-- sync sheet -->
+<div class="sheet" id="sheetAuth">
+  <div class="grip"></div>
+  <h2>Cloud sync</h2>
+  <p class="hint" id="syncStatus">Not set up yet</p>
+  <p class="hint">
+    Your timelines are kept as one JSON file in a <b>secret GitHub gist</b>.
+    No hosting and no sign-in popup — it works even when this page is opened
+    straight from a file on your phone.
+  </p>
+
+  <div class="field">
+    <label for="ghToken">GitHub token (needs only the "gist" scope)</label>
+    <input type="text" id="ghToken" autocomplete="off" spellcheck="false"
+           placeholder="ghp_… or github_pat_…">
+  </div>
+
+  <div class="field">
+    <label for="gistId">Sync code — leave empty on your first device</label>
+    <div class="stepper" style="padding:5px 5px 5px 12px;">
+      <input type="text" id="gistId" class="time-input mono" style="text-align:left;"
+             autocomplete="off" spellcheck="false" placeholder="created automatically">
+      <button class="trowbtn" id="btnCopyGist" title="Copy sync code">⧉</button>
+    </div>
+    <p class="hint" style="margin-top:6px;">
+      Paste this same code (and token) on your other devices to join them up.
+    </p>
+  </div>
+
+  <button class="btn primary" id="btnSaveToken">Save &amp; sync</button>
+  <div id="authControls" style="display:none;">
+    <button class="btn" id="btnCloudSyncNow">Sync now</button>
+    <div class="divider"></div>
+    <button class="btn danger" id="btnSignOut">Disconnect</button>
+  </div>
+</div>
+
+<!-- tile editor -->
+<div class="sheet" id="sheetTile">
+  <div class="grip"></div>
+  <h2 id="tileHeading">Tile details</h2>
+  <div class="field">
+    <label for="fTitle">Title</label>
+    <input type="text" id="fTitle" placeholder="What is this block?" autocomplete="off">
+  </div>
+  <div class="field">
+    <label for="fLocation">Location (Address or Name)</label>
+    <div class="stepper" style="padding:5px 5px 5px 12px;">
+      <input type="text" id="fLocation" class="time-input" style="text-align:left; font-size:14px;"
+             placeholder="Search a place..." autocomplete="off">
+      <button class="trowbtn" id="btnTestLocation" title="Open in Maps" style="display:none;">📍</button>
+    </div>
+    <div class="map-container" id="mapPreview">
+      <iframe id="mapFrame" src="" loading="lazy"></iframe>
+    </div>
+  </div>
+  <div class="row">
+    <div class="field">
+      <label>Starts</label>
+      <div class="stepper">
+        <button data-step="start" data-d="-1">−</button>
+        <input type="time" class="time-input val mono" id="vStart" min="06:00" max="22:00">
+        <button data-step="start" data-d="1">+</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Ends</label>
+      <div class="stepper">
+        <button data-step="end" data-d="-1">−</button>
+        <input type="time" class="time-input val mono" id="vEnd" min="06:00" max="22:00">
+        <button data-step="end" data-d="1">+</button>
+      </div>
+    </div>
+  </div>
+  <div class="field">
+    <label>Colour</label>
+    <div class="swatches" id="swatches"></div>
+  </div>
+  <div class="row">
+    <div class="field">
+      <label>Counter</label>
+      <div class="stepper">
+        <button data-step="counter" data-d="-1">−</button>
+        <div class="val mono" id="vCounter">0</div>
+        <button data-step="counter" data-d="1">+</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Lane</label>
+      <div class="stepper">
+        <button data-step="lane" data-d="-1">−</button>
+        <div class="val mono" id="vLane">1</div>
+        <button data-step="lane" data-d="1">+</button>
+      </div>
+    </div>
+  </div>
+  <div class="field">
+    <label for="fNotes">Notes</label>
+    <textarea id="fNotes" placeholder="Anything worth remembering"></textarea>
+  </div>
+  <button class="btn primary" id="btnDone">Close</button>
+  <button class="btn" id="btnOpenInside">Open inside</button>
+  <button class="btn" id="btnDuplicate">Duplicate</button>
+  <button class="btn danger" id="btnDelete">Delete tile</button>
+</div>
+
+<!-- all tiles in this view -->
+<aside class="drawer" id="sheetList">
+  <div class="drawer-head">
+    <div>
+      <h2 id="listHeading">All tiles</h2>
+      <div class="drawer-sub" id="listSub">—</div>
+    </div>
+    <button class="iconbtn" id="btnCloseList" aria-label="Close list">✕</button>
+  </div>
+  <div class="drawer-body">
+    <div id="tileList"></div>
+  </div>
+</aside>
+
+<!-- templates -->
+<div class="sheet" id="sheetTpl">
+  <div class="grip"></div>
+  <h2>Templates</h2>
+  <p class="hint">Tap a template to open it. Export writes a file you can send to anyone.</p>
+  <div id="tplList"></div>
+  <div class="divider"></div>
+  <button class="btn primary" id="btnSaveAs">Save current as new template</button>
+  <button class="btn" id="btnNewTpl">New empty template</button>
+  <button class="btn" id="btnExport">Export current template</button>
+  <button class="btn" id="btnImport">Import from file</button>
+  <input type="file" id="fileInput" accept=".json,application/json" hidden>
+  <div class="divider"></div>
+  <p class="hint">A backup holds every template at once.</p>
+  <button class="btn" id="btnBackup">Back up everything</button>
+  <button class="btn" id="btnRestore">Restore from backup</button>
+  <input type="file" id="restoreInput" accept=".json,application/json" hidden>
+  <div class="divider"></div>
+  <button class="btn" id="btnRename">Rename current</button>
+  <button class="btn danger" id="btnDeleteTpl">Delete current</button>
+</div>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   Chronoscale mobile
+   ============================================================ */
+
+const ROOT_START = 6 * 60, ROOT_END = 22 * 60;
+const ABS_START = 6 * 60, ABS_END = 24 * 60;
+const TOP_PAD_PX = 16;
+let dayStart = ROOT_START, dayEnd = ROOT_END;
+const SNAP = 1;                       
+const MIN_DUR = 1;
+const TICK_GAP = 40;                  
+const ZOOM_MAX = 48;
+const LS_KEY = 'chronoscale.v1';
+
+const PALETTE = ['#6ea8fe','#b35d5d','#c68642','#b7a13d','#5fa79f','#5d79c7',
+                 '#d96b8a','#e08a4e','#9ecf63','#63b77a','#63bcd6','#9a72d8',
+                 '#d06ac9','#f2f2f2','#a7b0bb'];
+
+/* ---------- storage ---------- */
+const Store = (() => {
+  let ok = true, mem = {};
+  try {
+    const p = '__cs_probe__';
+    localStorage.setItem(p, '1'); localStorage.removeItem(p);
+  } catch (e) { ok = false; }
+  return {
+    persistent: ok,
+    get(k) {
+      try { return ok ? localStorage.getItem(k) : (mem[k] ?? null); }
+      catch (e) { return mem[k] ?? null; }
+    },
+    set(k, v) {
+      try { ok ? localStorage.setItem(k, v) : (mem[k] = v); }
+      catch (e) { mem[k] = v; }
+    }
+  };
+})();
+
+/* ---------- state ---------- */
+let db = { current: 'Default', templates: { Default: [] } };
+let events = [];          
+let viewStack = [];       
+let pxPerMin = 1.6;       
+let selected = -1;
+let editing = -1;
+let lastTap = { time: 0, idx: -1 };
+let notifiedEvents = new Set();
+
+function minZoom(){
+  const span = Math.max(1, dayEnd - dayStart);
+  return Math.max(0.1, (scrollEl.clientHeight - TOP_PAD_PX) / span);
+}
+
+function rootEvents(){ return viewStack.length ? viewStack[0].events : events; }
+function pathTitles(){ return viewStack.map(s => s.title); }
+
+function resetRootView(){
+  viewStack = [];
+  let s = ROOT_START, e = ROOT_END;
+  for (const ev of events){
+    s = Math.min(s, Math.floor(ev.start_min / 60) * 60);
+    e = Math.max(e, Math.ceil(ev.end_min / 60) * 60);
+  }
+  dayStart = Math.max(ABS_START, s);
+  dayEnd   = Math.min(ABS_END, e);
+}
+
+function openChild(i){
+  const ev = events[i];
+  if (!Array.isArray(ev.children)) ev.children = [];
+  ev.children = ev.children.map(normalise).filter(Boolean);
+
+  viewStack.push({ events, start: dayStart, end: dayEnd, zoom: pxPerMin,
+                   scroll: scrollEl.scrollTop, title: ev.title, tile: ev });
+  events = ev.children;
+  dayStart = ev.start_min; dayEnd = ev.end_min;
+  selected = -1; editing = -1;
+  pxPerMin = fitZoom();
+  render();
+  scrollEl.scrollTop = 0;
+  toast(`Inside ${ev.title}`);
+}
+
+function goBack(){
+  if (!viewStack.length) return;
+  const s = viewStack.pop();
+  events = s.events; dayStart = s.start; dayEnd = s.end;
+  pxPerMin = s.zoom; selected = -1; editing = -1;
+  render();
+  scrollEl.scrollTop = s.scroll;
+}
+
+function fitZoom(){
+  const span = Math.max(1, dayEnd - dayStart);
+  const h = Math.max(200, scrollEl.clientHeight - TOP_PAD_PX);
+  return Math.max(minZoom(), Math.min(ZOOM_MAX, h / span));
+}
+
+function countDescendants(ev){
+  const kids = Array.isArray(ev.children) ? ev.children : [];
+  return kids.length;
+}
+
+/* ============================================================
+   Time helpers
+   ============================================================ */
+function clampMin(m){ return Math.max(ABS_START, Math.min(ABS_END, Math.round(m))); }
+function snap(m, step = SNAP){ return Math.round(m / step) * step; }
+
+function precisionStep(){
+  const zoomFactor = pxPerMin / 1.6;
+  if (zoomFactor >= 4) return 1;
+  if (zoomFactor >= 2) return 2;
+  if (zoomFactor >= 1) return 5;
+  return 15;
+}
+
+function fmt(min){
+  min = ((Math.round(min) % 1440) + 1440) % 1440;
+  const h24 = Math.floor(min / 60), m = min % 60;
+  const ap = h24 < 12 ? 'AM' : 'PM';
+  let h = h24 % 12; if (h === 0) h = 12;
+  return `${h}:${String(m).padStart(2,'0')} ${ap}`;
+}
+function fmt24(min){
+  min = ((Math.round(min) % 1440) + 1440) % 1440;
+  const h24 = Math.floor(min / 60), m = min % 60;
+  return `${String(h24).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+function parseTime(val) {
+  if (!val) return null;
+  const [h, m] = val.split(':').map(Number);
+  if (isNaN(h) || isNaN(m)) return null;
+  return h * 60 + m;
+}
+
+function fmtDur(min){
+  const h = Math.floor(min / 60), m = min % 60;
+  if (h && m) return `${h}h ${m}m`;
+  if (h) return `${h}h`;
+  return `${m}m`;
+}
+function nowMin(){ const d = new Date(); return d.getHours()*60 + d.getMinutes(); }
+
+function getMapsUrl(loc) {
+  if (!loc) return '';
+  loc = loc.trim();
+  if (/^https?:\/\//i.test(loc)) return loc;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`;
+}
+
+function getEmbedMapUrl(loc) {
+  if (!loc) return '';
+  loc = loc.trim();
+  return `https://maps.google.com/maps?q=${encodeURIComponent(loc)}&t=&z=14&ie=UTF8&iwloc=&output=embed`;
+}
+
+/* ============================================================
+   Notifications
+   ============================================================ */
+async function requestNotificationPermission() {
+  if (!("Notification" in window)) {
+    toast("Notifications are not supported in this browser");
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  if (perm === "granted") {
+    toast("Notifications enabled");
+    updateNotificationBtn();
+    checkTaskAlerts();
+  } else {
+    toast("Notification permission denied");
+  }
+}
+
+function updateNotificationBtn() {
+  const btn = document.getElementById('btnEnableNotifications');
+  if (!btn) return;
+  if ("Notification" in window && Notification.permission === "granted") {
+    btn.textContent = "Notifications active ✓";
+    btn.disabled = true;
+  } else {
+    btn.textContent = "Enable start notifications";
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('btnEnableNotifications').addEventListener('click', requestNotificationPermission);
+
+function checkTaskAlerts() {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+
+  const current = nowMin();
+  const rootList = rootEvents();
+
+  rootList.forEach(ev => {
+    const key = `${ev.title}-${ev.start_min}`;
+    if (ev.start_min === current && !notifiedEvents.has(key)) {
+      notifiedEvents.add(key);
+      try {
+        new Notification(fmt(ev.start_min), {
+          body: `${ev.title} is starting now (${fmtDur(ev.end_min - ev.start_min)})`,
+          tag: key
+        });
+      } catch (e) {}
+      vibrate(40);
+    }
+  });
+
+  if (current === 0) {
+    notifiedEvents.clear();
+  }
+}
+
+/* ============================================================
+   Collision logic
+   ============================================================ */
+function intervalsOverlap(aS,aE,bS,bE){ return aS < bE && bS < aE; }
+
+function laneEvents(lane, excludeIdx){
+  const out = [];
+  events.forEach((ev,i) => {
+    if (i === excludeIdx) return;
+    if ((ev.lane_bias|0) === lane) out.push(ev);
+  });
+  return out;
+}
+
+function clampMoveInLane(start0, end0, delta, lane, excludeIdx){
+  const dur = end0 - start0;
+  const minStart = Math.max(dayStart, 6 * 60);
+  const maxStart = dayEnd - dur;
+  let best = Math.max(minStart, Math.min(maxStart, start0 + delta));
+
+  if (delta > 0){
+    for (const ev of laneEvents(lane, excludeIdx)){
+      if (ev.start_min >= end0 || ev.end_min > start0) best = Math.min(best, ev.start_min - dur);
+    }
+  } else if (delta < 0){
+    for (const ev of laneEvents(lane, excludeIdx)){
+      if (ev.end_min <= start0 || ev.start_min < end0) best = Math.max(best, ev.end_min);
+    }
+  } else return start0;
+
+  best = Math.max(minStart, Math.min(maxStart, best));
+  if (delta > 0 && best < start0) return start0;
+  if (delta < 0 && best > start0) return start0;
+  return best;
+}
+
+function clampResizeTop(idx, proposed){
+  const ev = events[idx], lane = ev.lane_bias|0;
+  const minBound = Math.max(dayStart, 6 * 60);
+  let s = Math.max(minBound, Math.min(proposed, ev.end_min - MIN_DUR));
+  let blocker = minBound;
+  for (const o of laneEvents(lane, idx))
+    if (o.end_min <= ev.end_min) blocker = Math.max(blocker, o.end_min);
+  return Math.max(blocker, s);
+}
+function clampResizeBottom(idx, proposed){
+  const ev = events[idx], lane = ev.lane_bias|0;
+  let e = Math.min(dayEnd, Math.max(proposed, ev.start_min + MIN_DUR));
+  let blocker = dayEnd;
+  for (const o of laneEvents(lane, idx))
+    if (o.start_min >= ev.start_min) blocker = Math.min(blocker, o.start_min);
+  return Math.min(blocker, e);
+}
+function laneBlocked(startM, endM, lane, excludeIdx){
+  return laneEvents(lane, excludeIdx)
+    .some(o => intervalsOverlap(startM, endM, o.start_min, o.end_min));
+}
+function firstFreeLane(startM, endM, excludeIdx){
+  for (let l = 0; l < 40; l++) if (!laneBlocked(startM, endM, l, excludeIdx)) return l;
+  return 0;
+}
+function laneCount(){
+  return Math.max(2, events.reduce((n,e) => Math.max(n, (e.lane_bias|0) + 1), 2));
+}
+
+/* ============================================================
+   Model
+   ============================================================ */
+function makeTile(startM, endM, title, color){
+  return { start_min:Math.max(6 * 60, startM), end_min:Math.max(Math.max(6 * 60, startM) + MIN_DUR, endM), title:title||'New tile',
+           color:color||PALETTE[0], recurrence:'none', lane_bias:0,
+           notes:null, counter:0, children:[], task_id:null, location:null };
+}
+function normalise(raw){
+  if (!raw || typeof raw !== 'object') return null;
+  const s = clampMin(Math.max(6 * 60, Number(raw.start_min) || 6 * 60));
+  let e = clampMin(Number(raw.end_min) || s + 1);
+  if (e <= s) e = Math.min(ABS_END, s + MIN_DUR);
+  return {
+    start_min:s, end_min:e,
+    title: typeof raw.title === 'string' ? raw.title : 'Untitled',
+    color: /^#[0-9a-f]{6}$/i.test(raw.color || '') ? raw.color : PALETTE[0],
+    recurrence: raw.recurrence || 'none',
+    lane_bias: Math.max(0, parseInt(raw.lane_bias, 10) || 0),
+    notes: raw.notes ?? null,
+    counter: Math.max(0, parseInt(raw.counter, 10) || 0),
+    children: Array.isArray(raw.children) ? raw.children.map(normalise).filter(Boolean) : [],
+    task_id: raw.task_id ?? null,
+    location: typeof raw.location === 'string' ? raw.location : null
+  };
+}
+function noteText(n){
+  if (!n) return '';
+  if (typeof n === 'string') return n;
+  return typeof n.text === 'string' ? n.text : '';
+}
+
+/* ---------- persistence ---------- */
+function save(){
+  db.templates[db.current] = rootEvents();
+  touchTemplate(db.current);
+  try { Store.set(LS_KEY, JSON.stringify(db)); }
+  catch (e) { toast("Couldn't save — storage is full"); }
+  renderChrome();
+  syncToCloud();
+}
+function load(){
+  const raw = Store.get(LS_KEY);
+  if (raw){
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.templates){
+        db = parsed;
+        if (!db.templates[db.current]) db.current = Object.keys(db.templates)[0] || 'Default';
+      }
+    } catch (e){ }
+  }
+  if (!db.templates || !Object.keys(db.templates).length) db.templates = { Default: [] };
+  if (!db.templates[db.current]) db.current = Object.keys(db.templates)[0];
+  events = (db.templates[db.current] || []).map(normalise).filter(Boolean);
+}
+
+/* ============================================================
+   Rendering (Virtualization applied)
+   ============================================================ */
+const scrollEl = document.getElementById('scroll');
+const canvas   = document.getElementById('canvas');
+const bubble   = document.getElementById('bubble');
+const nowEl    = document.getElementById('now');
+const nowLabel = document.getElementById('nowLabel');
+
+const yOf = m => TOP_PAD_PX + (m - dayStart) * pxPerMin;
+const minOf = y => dayStart + (y - TOP_PAD_PX) / pxPerMin;
+
+function laneGeometry(){
+  const gutter = 64;
+  const width  = canvas.clientWidth - gutter - 20; 
+  const n = laneCount();
+  const gap = n > 1 ? 6 : 0;
+  let laneW = (width - gap * (n - 1)) / n;
+  if (laneW > 320) laneW = 320; 
+  return { gutter, laneW, gap };
+}
+
+function tickStep(){
+  const steps = [1,2,5,10,15,30,60,120,180,360];
+  for (const s of steps) if (s * pxPerMin >= TICK_GAP) return s;
+  return 360;
+}
+
+function subTickStep(mainStep){
+  if (mainStep >= 60 && 15 * pxPerMin >= 12) return 15;
+  if (mainStep >= 30 && 10 * pxPerMin >= 12) return 10;
+  if (mainStep >= 10 && 5 * pxPerMin >= 10) return 5;
+  if (mainStep >= 5 && 1 * pxPerMin >= 8) return 1;
+  return 0;
+}
+
+const gridLineCache = [];
+const gridLabCache = [];
+
+function drawGrid(){
+  const step = tickStep();
+  const subStep = subTickStep(step);
+  const effectiveStep = subStep > 0 ? subStep : step;
+  
+  const vStartMin = minOf(scrollEl.scrollTop);
+  const vEndMin = minOf(scrollEl.scrollTop + scrollEl.clientHeight);
+  
+  const first = Math.max(dayStart, Math.floor((vStartMin - 120) / effectiveStep) * effectiveStep);
+  const last = Math.min(dayEnd, Math.ceil((vEndMin + 120) / effectiveStep) * effectiveStep);
+
+  let idx = 0;
+  for (let m = first; m <= last; m += effectiveStep){
+    if (idx >= gridLineCache.length) {
+      const line = document.createElement('div');
+      canvas.appendChild(line);
+      gridLineCache.push(line);
+
+      const lab = document.createElement('div');
+      lab.className = 'hourlabel mono';
+      canvas.appendChild(lab);
+      gridLabCache.push(lab);
+    }
+
+    const y = yOf(m);
+    const isMain = m % step === 0;
+    
+    const line = gridLineCache[idx];
+    line.className = 'hourline' + (m % 360 === 0 ? ' major' : isMain ? '' : ' sub');
+    line.style.transform = `translateY(${y}px)`;
+    line.style.display = 'block';
+
+    const lab = gridLabCache[idx];
+    if (isMain) {
+      lab.style.transform = `translateY(calc(${y}px - 50%))`;
+      const h = Math.floor(m / 60) % 24, mm = m % 60;
+      let hh = h % 12; if (hh === 0) hh = 12;
+      lab.textContent = step < 60
+        ? `${hh}:${String(mm).padStart(2,'0')}`
+        : `${hh}${h < 12 ? 'am' : 'pm'}`;
+      lab.style.display = 'block';
+    } else {
+      lab.style.display = 'none';
+    }
+
+    idx++;
+  }
+
+  while (idx < gridLineCache.length){
+    gridLineCache[idx].style.display = 'none';
+    gridLabCache[idx].style.display = 'none';
+    idx++;
+  }
+}
+
+function drawTiles(){
+  canvas.querySelectorAll('.tile,.handle').forEach(n => n.remove());
+  const { gutter, laneW, gap } = laneGeometry();
+  const frag = document.createDocumentFragment();
+  const currentMin = nowMin();
+
+  events.forEach((ev, i) => {
+    const lane = ev.lane_bias|0;
+    const isPast = ev.end_min <= currentMin;
+    const top = yOf(ev.start_min), h = Math.max(16, (ev.end_min - ev.start_min) * pxPerMin);
+    const el = document.createElement('div');
+    
+    el.className = 'tile' + (i === selected ? ' sel' : '') + (h < 34 ? ' short' : '')
+                 + (drag && drag.active && drag.i === i ? ' drag' : '')
+                 + (isPast ? ' past' : '');
+                 
+    el.style.cssText = `top:${top}px; height:${h}px; left:${gutter + lane*(laneW+gap)}px; width:${laneW}px;`;
+    el.dataset.i = i;
+    
+    const bg = document.createElement('div');
+    bg.className = 'tile-bg';
+    bg.style.background = ev.color;
+    
+    if (currentMin > ev.start_min) {
+      const dur = ev.end_min - ev.start_min;
+      const past = currentMin - ev.start_min;
+      const pct = Math.min(100, Math.max(0, (past / dur) * 100));
+      if (pct > 0) {
+        const overlay = document.createElement('div');
+        overlay.className = 'tile-past-overlay';
+        overlay.style.cssText = `position:absolute; top:0; left:0; right:0; height:${pct}%; background:rgba(24, 26, 32, 0.7); backdrop-filter:grayscale(60%); z-index:4; pointer-events:none;`;
+        bg.appendChild(overlay);
+      }
+    }
+    el.appendChild(bg);
+    
+    const sticky = document.createElement('div');
+    sticky.className = 't-sticky';
+
+    const t = document.createElement('div');
+    t.className = 't-title'; 
+    t.textContent = ev.title;
+    sticky.appendChild(t);
+
+    const time = document.createElement('div');
+    time.className = 't-time mono';
+    time.textContent = `${fmt(ev.start_min)} – ${fmt(ev.end_min)}`;
+    sticky.appendChild(time);
+
+    const dur = document.createElement('div');
+    dur.className = 't-dur mono';
+    dur.textContent = `(${fmtDur(ev.end_min - ev.start_min)})`;
+    sticky.appendChild(dur);
+    
+    el.appendChild(sticky);
+
+    if (ev.location) {
+      const mapBtn = document.createElement('a');
+      mapBtn.className = 'tile-map-link';
+      mapBtn.href = getMapsUrl(ev.location);
+      mapBtn.target = '_blank';
+      mapBtn.rel = 'noopener noreferrer';
+      mapBtn.textContent = '📍';
+      mapBtn.title = 'Open location in Google Maps';
+      mapBtn.addEventListener('click', e => e.stopPropagation());
+      el.appendChild(mapBtn);
+    }
+
+    if (ev.counter > 0){
+      const b = document.createElement('div');
+      b.className = 'badge'; b.textContent = ev.counter;
+      el.appendChild(b);
+    }
+    if (countDescendants(ev) > 0){
+      const c = document.createElement('div');
+      c.className = 'corner';
+      c.title = 'Contains nested tiles';
+      el.appendChild(c);
+    }
+    frag.appendChild(el);
+  });
+  canvas.appendChild(frag);
+
+  if (selected >= 0 && selected < events.length){
+    rebuildHandles();
+  }
+}
+
+function rebuildHandles() {
+  canvas.querySelectorAll('.handle').forEach(h => h.remove());
+  if (selected < 0 || selected >= events.length) return;
+  const ev = events[selected];
+  const { gutter, laneW, gap } = laneGeometry();
+  const lane = ev.lane_bias | 0;
+  const top = yOf(ev.start_min);
+  const h = Math.max(16, (ev.end_min - ev.start_min) * pxPerMin);
+  const left = gutter + lane * (laneW + gap);
+
+  ['top','bot'].forEach(side => {
+    const hd = document.createElement('div');
+    hd.className = 'handle ' + side;
+    hd.dataset.handle = side; 
+    hd.dataset.i = selected;
+    hd.style.left  = left + 'px';
+    hd.style.width = laneW + 'px';
+    hd.style.top   = (side === 'top' ? top - 18 : top + h - 18) + 'px';
+    canvas.appendChild(hd);
+  });
+}
+
+function setSelection(idx){
+  selected = idx;
+  canvas.querySelectorAll('.tile').forEach((t, i) => {
+    t.classList.toggle('sel', i === selected);
+  });
+  rebuildHandles();
+}
+
+function updateTileDOM(i){
+  const ev = events[i];
+  const el = canvas.querySelector(`.tile[data-i="${i}"]`);
+  if (!el) return;
+  const { gutter, laneW, gap } = laneGeometry();
+  const lane = ev.lane_bias | 0;
+  const top = yOf(ev.start_min);
+  const h = Math.max(16, (ev.end_min - ev.start_min) * pxPerMin);
+  const left = gutter + lane * (laneW + gap);
+
+  el.style.top = top + 'px';
+  el.style.height = h + 'px';
+  el.style.left = left + 'px';
+  el.style.width = laneW + 'px';
+  el.classList.toggle('short', h < 34);
+
+  const timeEl = el.querySelector('.t-time');
+  if (timeEl) timeEl.textContent = `${fmt(ev.start_min)} – ${fmt(ev.end_min)}`;
+
+  const durEl = el.querySelector('.t-dur');
+  if (durEl) durEl.textContent = `(${fmtDur(ev.end_min - ev.start_min)})`;
+
+  const currentMin = nowMin();
+  let overlay = el.querySelector('.tile-past-overlay');
+  if (currentMin > ev.start_min) {
+    const dur = ev.end_min - ev.start_min;
+    const past = currentMin - ev.start_min;
+    const pct = Math.min(100, Math.max(0, (past / dur) * 100));
+    if (pct > 0) {
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'tile-past-overlay';
+        overlay.style.cssText = `position:absolute; top:0; left:0; right:0; background:rgba(24, 26, 32, 0.7); backdrop-filter:grayscale(60%); z-index:4; pointer-events:none;`;
+        const bg = el.querySelector('.tile-bg');
+        if (bg) bg.appendChild(overlay);
+      }
+      overlay.style.height = pct + '%';
+      overlay.style.display = 'block';
+    } else if (overlay) {
+      overlay.style.display = 'none';
+    }
+  } else if (overlay) {
+    overlay.style.display = 'none';
+  }
+
+  canvas.querySelectorAll(`.handle[data-i="${i}"]`).forEach(hd => {
+    hd.style.left = left + 'px';
+    hd.style.width = laneW + 'px';
+    const side = hd.dataset.handle;
+    hd.style.top = (side === 'top' ? top - 18 : top + h - 18) + 'px';
+  });
+}
+
+function drawNow(){
+  const m = nowMin();
+  const inView = m >= dayStart && m <= dayEnd;
+  nowEl.style.display = inView ? 'block' : 'none';
+  nowLabel.style.display = inView ? 'block' : 'none';
+  if (!inView) return;
+  const y = yOf(m);
+  nowEl.style.top = y + 'px';
+  nowLabel.style.top = y + 'px';
+  nowLabel.textContent = fmt(m).replace(' ','');
+  drawTiles(); 
+}
+
+function renderChrome(){
+  const total = events.reduce((s,e) => s + (e.end_min - e.start_min), 0);
+  const back = document.getElementById('btnBack');
+  const nested = viewStack.length > 0;
+  back.hidden = !nested;
+
+  if (nested){
+    document.getElementById('tplName').textContent = pathTitles().join(' › ');
+    document.getElementById('topInfo').textContent =
+      `${events.length === 1 ? '1 tile' : events.length + ' tiles'} · ${fmtDur(total)} planned`;
+  } else {
+    document.getElementById('tplName').textContent = db.current;
+    document.getElementById('topInfo').textContent =
+      events.length ? `${events.length === 1 ? '1 tile' : events.length + ' tiles'} · ${fmtDur(total)} planned` : 'No tiles yet';
+  }
+}
+document.getElementById('btnBack').addEventListener('click', goBack);
+
+function render(){
+  canvas.style.height = (TOP_PAD_PX + yOf(dayEnd) + 24) + 'px';
+  drawGrid(); 
+  drawTiles(); 
+  drawNow(); 
+  renderChrome();
+}
+
+let scrollRAF = null;
+scrollEl.addEventListener('scroll', () => {
+  if (scrollRAF) return;
+  scrollRAF = requestAnimationFrame(() => {
+    drawGrid();
+    scrollRAF = null;
+  });
+}, {passive: true});
+
+/* ============================================================
+   Touch: Pinch to zoom
+   ============================================================ */
+function zoomTo(next, anchorMin, offsetPx){
+  const clamped = Math.max(minZoom(), Math.min(ZOOM_MAX, next));
+  if (Math.abs(clamped - pxPerMin) < 0.0005) return;
+  pxPerMin = clamped;
+  render();
+  const maxScroll = Math.max(0, canvas.clientHeight - scrollEl.clientHeight);
+  const targetScroll = Math.max(0, Math.min(maxScroll, yOf(anchorMin) - offsetPx));
+  scrollEl.scrollTop = targetScroll;
+}
+
+let pinch0 = null;
+let pinchRAF = null;
+
+function touchMidY(e){ return (e.touches[0].clientY + e.touches[1].clientY) / 2; }
+function touchDist(e){
+  const [a,b] = e.touches;
+  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1;
+}
+
+window.addEventListener('touchstart', e => {
+  if (e.touches.length >= 2){
+    if (e.cancelable) e.preventDefault();
+    clearTimeout(longPressTimer);
+    clearTimeout(tileEditTimer);
+    stopAutoScroll();
+    if (canvasCreate) { canvasCreate = null; hideBubble(); }
+    if (drag){ 
+      if (drag.el) drag.el.classList.remove('drag');
+      drag = null; 
+      hideBubble(); 
+    }
+    const offset = touchMidY(e) - scrollEl.getBoundingClientRect().top;
+    pinch0 = { 
+      d: touchDist(e), 
+      z: pxPerMin, 
+      offset,
+      anchor: minOf(scrollEl.scrollTop + offset) 
+    };
+    return;
+  }
+  onDown(e);
+}, {passive:false, capture:true});
+
+window.addEventListener('touchmove', e => {
+  if (e.touches && e.touches.length >= 2){
+    if (e.cancelable) e.preventDefault();
+    if (!pinch0){
+      const offset = touchMidY(e) - scrollEl.getBoundingClientRect().top;
+      pinch0 = { 
+        d: touchDist(e), 
+        z: pxPerMin, 
+        offset,
+        anchor: minOf(scrollEl.scrollTop + offset) 
+      };
+    }
+    const dist = touchDist(e);
+    if (pinch0.d > 0 && dist > 0) {
+      if (pinchRAF) cancelAnimationFrame(pinchRAF);
+      pinchRAF = requestAnimationFrame(() => {
+        zoomTo(pinch0.z * (dist / pinch0.d), pinch0.anchor, pinch0.offset);
+        pinchRAF = null;
+      });
+    }
+    return;
+  }
+  onMove(e);
+}, {passive:false, capture:false});
+
+window.addEventListener('touchend', e => {
+  if (e.touches.length < 2) pinch0 = null;
+  if (!e.touches || e.touches.length === 0) onUp(e);
+}, {passive:false, capture:false});
+
+window.addEventListener('touchcancel', e => {
+  if (e.touches && e.touches.length < 2) pinch0 = null;
+  if (!e.touches || e.touches.length === 0) onUp(e);
+}, {passive:false, capture:false});
+
+/* ============================================================
+   Touch: Drag, Long-press & Handle Resizing
+   ============================================================ */
+let drag = null;
+let longPressTimer = null;
+let tileEditTimer = null;
+let isTouch = false;
+let canvasCreate = null;
+let autoScrollRAF = null;
+let autoScrollSpeed = 0;
+
+function startAutoScroll(speed) {
+  autoScrollSpeed = speed;
+  if (autoScrollRAF) return;
+  function step() {
+    if (autoScrollSpeed !== 0) {
+      const maxScroll = Math.max(0, canvas.clientHeight - scrollEl.clientHeight);
+      scrollEl.scrollTop = Math.max(0, Math.min(maxScroll, scrollEl.scrollTop + autoScrollSpeed));
+      if (canvasCreate && canvasCreate.active && canvasCreate.lastClientY !== undefined) {
+        updateCreationFromPoint(canvasCreate.lastClientY);
+      }
+      autoScrollRAF = requestAnimationFrame(step);
+    } else {
+      autoScrollRAF = null;
+    }
+  }
+  autoScrollRAF = requestAnimationFrame(step);
+}
+
+function stopAutoScroll() {
+  autoScrollSpeed = 0;
+  if (autoScrollRAF) {
+    cancelAnimationFrame(autoScrollRAF);
+    autoScrollRAF = null;
+  }
+}
+
+function checkAutoScrollEdge(clientY) {
+  const rect = scrollEl.getBoundingClientRect();
+  const threshold = 60;
+  if (clientY < rect.top + threshold) {
+    const intensity = 1 - Math.max(0, (clientY - rect.top) / threshold);
+    startAutoScroll(-Math.max(3, intensity * 16));
+  } else if (clientY > rect.bottom - threshold) {
+    const intensity = 1 - Math.max(0, (rect.bottom - clientY) / threshold);
+    startAutoScroll(Math.max(3, intensity * 16));
+  } else {
+    stopAutoScroll();
+  }
+}
+
+function updateCreationFromPoint(clientY) {
+  const canvasRect = canvas.getBoundingClientRect();
+  const currentYMin = minOf(clientY - canvasRect.top);
+  const step = 1;
+  const ev = events[editing];
+  if (ev && canvasCreate) {
+    const minStart = canvasCreate.startYMin;
+    const targetEnd = Math.max(minStart + 1, currentYMin);
+    const newEnd = clampResizeBottom(editing, snap(targetEnd, step));
+    ev.end_min = Math.max(ev.start_min + 1, newEnd);
+    updateTileDOM(editing);
+    showBubble(`${fmt(ev.start_min)} – ${fmt(ev.end_min)} · ${fmtDur(ev.end_min - ev.start_min)}`, yOf(ev.end_min) + 8, ev.lane_bias|0);
+  }
+}
+
+canvas.addEventListener('contextmenu', e => {
+  if (e.target.closest('.tile') || e.target.closest('.handle')) e.preventDefault();
+});
+
+function getPt(e) {
+  return e.changedTouches ? e.changedTouches[0] : e;
+}
+
+function onDown(e){
+  if (e.type === 'touchstart') isTouch = true;
+  if (e.type === 'mousedown' && isTouch) return;
+  if (e.touches && e.touches.length > 1) return;
+
+  const handle = e.target.closest('.handle');
+  const tile   = e.target.closest('.tile');
+  const pt = getPt(e);
+  const rect = canvas.getBoundingClientRect();
+  const clickY = pt.clientY - rect.top;
+  const clickX = pt.clientX - rect.left;
+  const clickedMin = clampMin(minOf(clickY));
+
+  if (!handle && !tile) {
+    const g = laneGeometry();
+    const clickedLane = Math.max(0, Math.floor((clickX - g.gutter) / (g.laneW + g.gap)));
+    const step = 1;
+    const alignedStart = Math.max(6 * 60, snap(clickedMin, step));
+    const initDur = 1;
+
+    canvasCreate = {
+      startYMin: alignedStart,
+      lane: Math.min(clickedLane, laneCount() - 1),
+      y0: pt.clientY,
+      x0: pt.clientX,
+      e0: alignedStart + initDur,
+      active: false,
+      isTouch: e.type === 'touchstart'
+    };
+
+    longPressTimer = setTimeout(() => {
+      if (canvasCreate) {
+        canvasCreate.active = true;
+        vibrate(20);
+        const startM = canvasCreate.startYMin;
+        const endM = Math.min(dayEnd, canvasCreate.e0);
+        const newTile = makeTile(startM, endM, 'New tile', PALETTE[events.length % PALETTE.length]);
+        newTile.lane_bias = canvasCreate.lane;
+        events.push(newTile);
+        editing = events.length - 1;
+        setSelection(editing);
+        render();
+        updateTileDOM(editing);
+      }
+    }, 400);
+    return;
+  }
+
+  const i = parseInt((handle || tile).dataset.i, 10);
+  const ev = events[i];
+
+  if (handle && e.cancelable && e.type === 'touchstart') {
+    e.preventDefault(); 
+  } else if (!handle) {
+    const now = Date.now();
+    if (lastTap.idx === i && now - lastTap.time < 450) {
+      clearTimeout(longPressTimer);
+      clearTimeout(tileEditTimer);
+      drag = null;
+      lastTap = { time: 0, idx: -1 };
+      openChild(i);
+      return;
+    }
+    lastTap = { time: now, idx: i };
+
+    if (selected !== i) { 
+      setSelection(i); 
+    }
+  }
+
+  drag = {
+    i, mode: handle ? handle.dataset.handle : 'move',
+    y0: pt.clientY, x0: pt.clientX,
+    s0: ev.start_min, e0: ev.end_min, lane0: ev.lane_bias|0,
+    moved: false, active: !!handle,
+    el: canvas.querySelector(`.tile[data-i="${i}"]`),
+    isTouch: e.type === 'touchstart'
+  };
+  
+  const g = laneGeometry();
+  drag.step = Math.max(1, g.laneW + g.gap);
+
+  if (handle) {
+    if (drag.el) drag.el.classList.add('drag');
+  } else {
+    longPressTimer = setTimeout(() => {
+      if (drag && !drag.active) {
+        drag.active = true;
+        if (drag.el) drag.el.classList.add('drag');
+        vibrate(15);
+      }
+    }, 220);
+
+    tileEditTimer = setTimeout(() => {
+      if (drag && !drag.moved) {
+        vibrate(25);
+        if (drag.el) drag.el.classList.remove('drag');
+        drag = null;
+        openTile(i);
+      }
+    }, 600);
+  }
+}
+
+function onMove(e){
+  const pt = getPt(e);
+
+  if (canvasCreate){
+    const dy = pt.clientY - canvasCreate.y0;
+    const dx = pt.clientX - canvasCreate.x0;
+    canvasCreate.lastClientY = pt.clientY;
+
+    if (!canvasCreate.active) {
+      if (Math.hypot(dx, dy) > 10) {
+        clearTimeout(longPressTimer);
+        canvasCreate = null;
+      }
+      return;
+    }
+    if (e.cancelable) e.preventDefault();
+    
+    checkAutoScrollEdge(pt.clientY);
+    updateCreationFromPoint(pt.clientY);
+    return;
+  }
+
+  if (!drag) return;
+  if (drag.isTouch && e.type === 'mousemove') return;
+  if (e.touches && e.touches.length > 1) return;
+
+  const dy = pt.clientY - drag.y0;
+  const dx = pt.clientX - drag.x0;
+
+  if (Math.hypot(dx, dy) > 6) {
+    clearTimeout(tileEditTimer);
+  }
+
+  if (!drag.active) {
+    if (Math.hypot(dx, dy) > 10) {
+      clearTimeout(longPressTimer);
+      clearTimeout(tileEditTimer);
+      drag = null; 
+    }
+    return;
+  }
+
+  if (e.cancelable) e.preventDefault();
+
+  if (!drag.moved){
+    if (Math.abs(dy) < 3 && Math.abs(dx) < 3 && drag.mode !== 'move') return;
+    drag.moved = true;
+    clearTimeout(tileEditTimer);
+  }
+
+  const ev = events[drag.i];
+  const step = 1;
+  const deltaMin = snap(dy / pxPerMin, step);
+
+  if (drag.mode === 'move'){
+    const stepLane = drag.step;
+    const maxLane = Math.max(laneCount(), drag.lane0 + 1);
+    const wanted = Math.max(0, Math.min(maxLane, drag.lane0 + Math.round(dx / stepLane)));
+
+    const dur = drag.e0 - drag.s0;
+    let lane = ev.lane_bias|0;
+    if (wanted !== lane){
+      const probe = clampMoveInLane(drag.s0, drag.e0, deltaMin, wanted, drag.i);
+      if (!laneBlocked(probe, probe + dur, wanted, drag.i)){
+        lane = wanted;
+        ev.lane_bias = lane;
+      }
+    }
+    const ns = Math.max(6 * 60, clampMoveInLane(drag.s0, drag.e0, deltaMin, lane, drag.i));
+    ev.start_min = ns; ev.end_min = ns + dur;
+    updateTileDOM(drag.i);
+    showBubble(`${fmt(ev.start_min)} – ${fmt(ev.end_min)}`, yOf(ev.start_min) - 30, ev.lane_bias|0);
+  } else if (drag.mode === 'top'){
+    ev.start_min = Math.max(6 * 60, clampResizeTop(drag.i, snap(drag.s0 + deltaMin, step)));
+    updateTileDOM(drag.i);
+    showBubble(`${fmt(ev.start_min)} · ${fmtDur(ev.end_min - ev.start_min)}`, yOf(ev.start_min) - 30, ev.lane_bias|0);
+  } else {
+    ev.end_min = clampResizeBottom(drag.i, snap(drag.e0 + deltaMin, step));
+    updateTileDOM(drag.i);
+    showBubble(`${fmt(ev.end_min)} · ${fmtDur(ev.end_min - ev.start_min)}`, yOf(ev.end_min) + 8, ev.lane_bias|0);
+  }
+}
+
+function onUp(e){
+  clearTimeout(tileEditTimer);
+  stopAutoScroll();
+
+  if (canvasCreate){
+    clearTimeout(longPressTimer);
+    const wasActive = canvasCreate.active;
+    canvasCreate = null;
+    hideBubble();
+    if (wasActive && editing !== -1) {
+      save(); render();
+      openTile(editing);
+    }
+    return;
+  }
+
+  if (!drag) return;
+  if (drag.isTouch && e && (e.type === 'mouseup' || e.type === 'mouseleave')) return;
+
+  clearTimeout(longPressTimer);
+  const { i, moved, active } = drag;
+  if (drag.el) drag.el.classList.remove('drag');
+  drag = null;
+  hideBubble();
+
+  if (!active) {
+    setSelection(i);
+  } else if (moved) {
+    save(); render(); vibrate(8);
+  } else {
+    setSelection(i);
+  }
+  
+  if (e && e.type && e.type.startsWith('touch')) {
+    setTimeout(() => { isTouch = false; }, 300);
+  }
+}
+
+function showBubble(text, y, lane = 0){
+  const { gutter, laneW, gap } = laneGeometry();
+  const left = gutter + lane * (laneW + gap);
+  bubble.textContent = text;
+  bubble.style.display = 'block';
+  bubble.style.top = Math.max(2, y) + 'px';
+  bubble.style.left = left + 'px';
+}
+function hideBubble(){ bubble.style.display = 'none'; }
+function vibrate(ms){ try { navigator.vibrate && navigator.vibrate(ms); } catch(e){} }
+
+canvas.addEventListener('mousedown',  onDown);
+window.addEventListener('mousemove',  onMove);
+window.addEventListener('mouseup',    onUp);
+
+/* tap empty space to deselect */
+scrollEl.addEventListener('click', e => {
+  if (e.target.closest('.tile') || e.target.closest('.handle')) return;
+  if (selected !== -1){ setSelection(-1); }
+});
+
+/* ============================================================
+   Sheets
+   ============================================================ */
+const scrim = document.getElementById('scrim');
+const sheetTile = document.getElementById('sheetTile');
+const sheetTpl  = document.getElementById('sheetTpl');
+const sheetAuth = document.getElementById('sheetAuth');
+const sheetSettings = document.getElementById('sheetSettings');
+
+function openSheet(el){ scrim.classList.add('on'); el.classList.add('on'); }
+function closeSheets(){
+  scrim.classList.remove('on');
+  [sheetTile, sheetTpl, sheetList, sheetAuth, sheetSettings].forEach(s => s.classList.remove('on'));
+  if (editing !== -1){ commitEdits(); editing = -1; }
+}
+scrim.addEventListener('click', closeSheets);
+
+/* ---------- settings sheet handlers ---------- */
+document.getElementById('btnSettings').addEventListener('click', () => {
+  openSheet(sheetSettings);
+});
+
+document.getElementById('btnOpenAuth').addEventListener('click', () => {
+  sheetSettings.classList.remove('on');
+  renderAuthSheet();
+  openSheet(sheetAuth);
+});
+
+document.getElementById('btnOpenTemplates').addEventListener('click', () => {
+  sheetSettings.classList.remove('on');
+  openTemplates();
+});
+
+/* ---------- tile editor ---------- */
+function openTile(i){
+  editing = i; setSelection(i);
+  const ev = events[i];
+  document.getElementById('fTitle').value = ev.title;
+  document.getElementById('fLocation').value = ev.location || '';
+  
+  const testBtn = document.getElementById('btnTestLocation');
+  const mapPreview = document.getElementById('mapPreview');
+  const mapFrame = document.getElementById('mapFrame');
+  
+  if (ev.location) {
+    testBtn.style.display = 'flex';
+    mapPreview.style.display = 'block';
+    mapFrame.src = getEmbedMapUrl(ev.location);
+  } else {
+    testBtn.style.display = 'none';
+    mapPreview.style.display = 'none';
+    mapFrame.src = '';
+  }
+
+  document.getElementById('fNotes').value = noteText(ev.notes);
+  refreshSteppers();
+  buildSwatches(ev.color);
+  document.getElementById('btnOpenInside').textContent = 'Open inside';
+  openSheet(sheetTile);
+}
+
+document.getElementById('fLocation').addEventListener('input', e => {
+  const val = e.target.value.trim();
+  const testBtn = document.getElementById('btnTestLocation');
+  const mapPreview = document.getElementById('mapPreview');
+  const mapFrame = document.getElementById('mapFrame');
+  
+  if (val) {
+    testBtn.style.display = 'flex';
+    mapPreview.style.display = 'block';
+    mapFrame.src = getEmbedMapUrl(val);
+  } else {
+    testBtn.style.display = 'none';
+    mapPreview.style.display = 'none';
+    mapFrame.src = '';
+  }
+});
+
+document.getElementById('btnTestLocation').addEventListener('click', () => {
+  const val = document.getElementById('fLocation').value.trim();
+  if (val) window.open(getMapsUrl(val), '_blank');
+});
+
+function refreshSteppers(){
+  if (editing === -1) return;
+  const ev = events[editing];
+  document.getElementById('vStart').value = fmt24(ev.start_min);
+  document.getElementById('vEnd').value   = fmt24(ev.end_min);
+  document.getElementById('vCounter').textContent = ev.counter;
+  document.getElementById('vLane').textContent    = (ev.lane_bias|0) + 1;
+}
+
+document.getElementById('vStart').addEventListener('change', function(e) {
+  if (editing === -1) return;
+  const ev = events[editing];
+  let m = parseTime(e.target.value);
+  if (m !== null) {
+    m = Math.max(6 * 60, Math.min(ROOT_END, m));
+    const dur = ev.end_min - ev.start_min;
+    const delta = m - ev.start_min;
+    const ns = Math.max(6 * 60, clampMoveInLane(ev.start_min, ev.end_min, delta, ev.lane_bias|0, editing));
+    if (ns !== m) toast('Blocked by boundary or another tile');
+    ev.start_min = ns;
+    ev.end_min = ns + dur;
+    refreshSteppers(); save(); render();
+  }
+});
+
+document.getElementById('vEnd').addEventListener('change', function(e) {
+  if (editing === -1) return;
+  const ev = events[editing];
+  let m = parseTime(e.target.value);
+  if (m !== null) {
+    m = Math.max(6 * 60, Math.min(ROOT_END, m));
+    if (m <= ev.start_min) m = ev.start_min + MIN_DUR; 
+    const delta = m - ev.end_min;
+    const ne = clampResizeBottom(editing, ev.end_min + delta);
+    if (ne !== m) toast('Blocked by another tile');
+    ev.end_min = ne;
+    refreshSteppers(); save(); render();
+  }
+});
+
+function buildSwatches(active){
+  const box = document.getElementById('swatches');
+  box.innerHTML = '';
+  PALETTE.forEach(c => {
+    const s = document.createElement('div');
+    s.className = 'sw' + (c.toLowerCase() === (active||'').toLowerCase() ? ' on' : '');
+    s.style.background = c;
+    s.addEventListener('click', () => {
+      if (editing === -1) return;
+      events[editing].color = c;
+      buildSwatches(c); drawTiles(); save();
+    });
+    box.appendChild(s);
+  });
+}
+function commitEdits(){
+  if (editing === -1) return;
+  const ev = events[editing];
+  const title = document.getElementById('fTitle').value.trim();
+  ev.title = title || 'Untitled';
+  const loc = document.getElementById('fLocation').value.trim();
+  ev.location = loc || null;
+  const notes = document.getElementById('fNotes').value;
+  ev.notes = notes ? { text: notes, tags: {} } : null;
+  save(); render();
+}
+
+document.querySelectorAll('[data-step]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (editing === -1) return;
+    const ev = events[editing], d = parseInt(btn.dataset.d, 10);
+    const kind = btn.dataset.step;
+
+    if (kind === 'start'){
+      const dur = ev.end_min - ev.start_min;
+      const ns = Math.max(6 * 60, clampMoveInLane(ev.start_min, ev.end_min, d, ev.lane_bias|0, editing));
+      if (ns === ev.start_min) return toast('Blocked by boundary or another tile');
+      ev.start_min = ns; ev.end_min = ns + dur;
+    } else if (kind === 'end'){
+      ev.end_min = clampResizeBottom(editing, ev.end_min + d);
+    } else if (kind === 'counter'){
+      ev.counter = Math.max(0, ev.counter + d);
+    } else if (kind === 'lane'){
+      const target = Math.max(0, (ev.lane_bias|0) + d);
+      if (laneBlocked(ev.start_min, ev.end_min, target, editing))
+        return toast('That lane is taken at this time');
+      ev.lane_bias = target;
+    }
+    refreshSteppers(); save(); render(); vibrate(5);
+  });
+});
+
+document.getElementById('btnDone').addEventListener('click', closeSheets);
+
+document.getElementById('btnOpenInside').addEventListener('click', () => {
+  if (editing === -1) return;
+  const i = editing;
+  commitEdits();
+  editing = -1;
+  closeSheets();
+  openChild(i);
+});
+
+document.getElementById('btnDelete').addEventListener('click', () => {
+  if (editing === -1) return;
+  events.splice(editing, 1);
+  editing = -1; setSelection(-1);
+  closeSheets(); save(); render(); toast('Tile deleted');
+});
+
+document.getElementById('btnDuplicate').addEventListener('click', () => {
+  if (editing === -1) return;
+  const src = events[editing];
+  const dur = src.end_min - src.start_min;
+  const copy = normalise(JSON.parse(JSON.stringify(src)));
+  copy.lane_bias = firstFreeLane(copy.start_min, copy.end_min, -1);
+  if (laneBlocked(copy.start_min, copy.end_min, copy.lane_bias, -1)){
+    copy.start_min = Math.min(dayEnd - dur, copy.end_min);
+    copy.end_min = copy.start_min + dur;
+  }
+  events.push(copy);
+  commitEdits(); closeSheets(); save(); render(); toast('Tile duplicated');
+});
+
+/* ============================================================
+   Tile list
+   ============================================================ */
+const sheetList = document.getElementById('sheetList');
+
+function openList(){ buildTileList(); openSheet(sheetList); }
+
+function buildTileList(){
+  const box = document.getElementById('tileList');
+  const total = events.reduce((s,e) => s + (e.end_min - e.start_min), 0);
+  document.getElementById('listHeading').textContent =
+    viewStack.length ? pathTitles()[pathTitles().length-1] : 'All tiles';
+  document.getElementById('listSub').textContent = new Date().toLocaleDateString(undefined,{weekday:'long', month:'long', day:'numeric'});
+  box.innerHTML = '';
+  if (!events.length){
+    box.innerHTML = '<div class="empty">No tiles here yet.<br>Long press empty space to make one.</div>';
+    return;
+  }
+  events.map((ev,i) => ({ev,i}))
+        .sort((a,b) => a.ev.start_min - b.ev.start_min ||
+                       (a.ev.lane_bias|0) - (b.ev.lane_bias|0))
+        .forEach(({ev,i}) => {
+    const row = document.createElement('div');
+    row.className = 'trow';
+
+    const dot = document.createElement('div');
+    dot.className = 'tdot'; dot.style.background = ev.color;
+
+    const mid = document.createElement('div');
+    mid.className = 'tmid';
+    const nm = document.createElement('div');
+    nm.className = 'tname'; nm.textContent = ev.title;
+    const sub = document.createElement('div');
+    sub.className = 'tsub mono';
+    const kids = countDescendants(ev);
+    sub.textContent = `${fmt(ev.start_min)} – ${fmt(ev.end_min)} · ${fmtDur(ev.end_min-ev.start_min)}`
+      + (kids ? `  ·  ${kids} inside` : '')
+      + (ev.location ? ` · 📍 ${ev.location}` : '');
+    mid.appendChild(nm); mid.appendChild(sub);
+
+    const counterWrap = document.createElement('div');
+    counterWrap.className = 'tcounter-wrap';
+
+    const btnDown = document.createElement('button');
+    btnDown.className = 'iconbtn-small';
+    btnDown.textContent = '−';
+    btnDown.setAttribute('aria-label', 'Decrease counter');
+    btnDown.addEventListener('click', e => {
+      e.stopPropagation();
+      ev.counter = Math.max(0, (ev.counter || 0) - 1);
+      save(); render(); buildTileList();
+    });
+
+    const lbl = document.createElement('div');
+    lbl.className = 'tcounter-lbl mono';
+    lbl.textContent = ev.counter || 0;
+
+    const btnUp = document.createElement('button');
+    btnUp.className = 'iconbtn-small';
+    btnUp.textContent = '+';
+    btnUp.setAttribute('aria-label', 'Increase counter');
+    btnUp.addEventListener('click', e => {
+      e.stopPropagation();
+      ev.counter = (ev.counter || 0) + 1;
+      save(); render(); buildTileList();
+    });
+
+    counterWrap.appendChild(btnDown);
+    counterWrap.appendChild(lbl);
+    counterWrap.appendChild(btnUp);
+
+    const open = document.createElement('button');
+    open.className = 'trowbtn'; open.textContent = '›';
+    open.setAttribute('aria-label', 'Open inside ' + ev.title);
+    open.addEventListener('click', e => {
+      e.stopPropagation();
+      closeSheets(); openChild(i);
+    });
+
+    const del = document.createElement('button');
+    del.className = 'trowbtn danger'; del.textContent = '✕';
+    del.setAttribute('aria-label', 'Delete ' + ev.title);
+    del.addEventListener('click', e => {
+      e.stopPropagation();
+      const kidCount = countDescendants(ev);
+      const warn = kidCount
+        ? `Delete "${ev.title}" and the ${kidCount} tile${kidCount===1?'':'s'} inside it?`
+        : `Delete "${ev.title}"?`;
+      if (!confirm(warn)) return;
+      events.splice(i, 1);
+      if (selected === i) setSelection(-1);
+      save(); render(); buildTileList();
+      toast('Tile deleted');
+    });
+
+    row.appendChild(dot); 
+    row.appendChild(mid);
+    row.appendChild(counterWrap);
+    row.appendChild(open); 
+    row.appendChild(del);
+    row.addEventListener('click', () => { closeSheets(); openTile(i); });
+    box.appendChild(row);
+  });
+}
+document.getElementById('btnList').addEventListener('click', openList);
+document.getElementById('btnCloseList').addEventListener('click', closeSheets);
+
+(() => {
+  let sx = null, sy = null;
+  sheetList.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) return;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+  }, {passive:true});
+  sheetList.addEventListener('touchend', e => {
+    if (sx === null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - sx, dy = t.clientY - sy;
+    if (dx < -55 && Math.abs(dy) < 45) closeSheets();
+    sx = sy = null;
+  }, {passive:true});
+})();
+
+/* ============================================================
+   Templates
+   ============================================================ */
+function openTemplates(){ buildTplList(); openSheet(sheetTpl); }
+
+function buildTplList(){
+  const box = document.getElementById('tplList');
+  box.innerHTML = '';
+  const names = Object.keys(db.templates);
+  if (!names.length){
+    box.innerHTML = '<div class="empty">No templates yet.</div>';
+    return;
+  }
+  names.forEach(name => {
+    const n = (db.templates[name] || []).length;
+    const row = document.createElement('div');
+    row.className = 'tpl' + (name === db.current ? ' on' : '');
+    row.innerHTML = `<div class="dot"></div><div class="nm"></div>
+                     <div class="ct">${n === 1 ? '1 tile' : n + ' tiles'}</div>`;
+    row.querySelector('.nm').textContent = name;
+    row.addEventListener('click', () => {
+      if (name === db.current) return;
+      db.templates[db.current] = rootEvents();
+      db.current = name;
+      events = (db.templates[name] || []).map(normalise).filter(Boolean);
+      setSelection(-1); resetRootView();
+      save(); render(); buildTplList();
+      toast(`Opened ${name}`);
+    });
+    box.appendChild(row);
+  });
+}
+
+function uniqueName(base){
+  let n = base, i = 2;
+  while (db.templates[n]) n = `${base} ${i++}`;
+  return n;
+}
+
+document.getElementById('btnSaveAs').addEventListener('click', () => {
+  const name = (prompt('Name for the new template:', uniqueName(db.current + ' copy')) || '').trim();
+  if (!name) return;
+  if (db.templates[name]) return toast('That name is already taken');
+  db.templates[db.current] = rootEvents();
+  db.templates[name] = JSON.parse(JSON.stringify(rootEvents()));
+  db.current = name;
+  events = db.templates[name].map(normalise).filter(Boolean);
+  resetRootView();
+  save(); render(); buildTplList();
+  toast(`Saved as ${name}`);
+});
+
+document.getElementById('btnNewTpl').addEventListener('click', () => {
+  const name = (prompt('Name for the new template:', uniqueName('Template')) || '').trim();
+  if (!name) return;
+  if (db.templates[name]) return toast('That name is already taken');
+  db.templates[db.current] = rootEvents();
+  db.templates[name] = [];
+  db.current = name; events = []; setSelection(-1); resetRootView();
+  save(); render(); buildTplList();
+  toast(`Created ${name}`);
+});
+
+document.getElementById('btnRename').addEventListener('click', () => {
+  const name = (prompt('New name:', db.current) || '').trim();
+  if (!name || name === db.current) return;
+  if (db.templates[name]) return toast('That name is already taken');
+  const rebuilt = {};
+  Object.keys(db.templates).forEach(k => {
+    rebuilt[k === db.current ? name : k] = db.templates[k];
+  });
+  db.templates = rebuilt; db.current = name;
+  save(); render(); buildTplList();
+  toast(`Renamed to ${name}`);
+});
+
+document.getElementById('btnDeleteTpl').addEventListener('click', () => {
+  const names = Object.keys(db.templates);
+  if (names.length < 2) return toast('Keep at least one template');
+  if (!confirm(`Delete "${db.current}" and its tiles?`)) return;
+  const gone = db.current;
+  delete db.templates[gone];
+  tombstone(gone);
+  db.current = Object.keys(db.templates)[0];
+  events = (db.templates[db.current] || []).map(normalise).filter(Boolean);
+  selected = -1; resetRootView();
+  save(); render(); buildTplList();
+  toast(`Deleted ${gone}`);
+});
+
+/* ---------- export / import ---------- */
+document.getElementById('btnExport').addEventListener('click', () => {
+  db.templates[db.current] = rootEvents();
+  const blob = new Blob([JSON.stringify(rootEvents(), null, 2)], {type:'application/json'});
+  const safe = db.current.replace(/[^a-z0-9 _-]/gi, '').trim().replace(/\s+/g, '_') || 'template';
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `events_${safe}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('Exported');
+});
+
+document.getElementById('btnImport').addEventListener('click',
+  () => document.getElementById('fileInput').click());
+
+document.getElementById('fileInput').addEventListener('change', e => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let data;
+    try { data = JSON.parse(reader.result); }
+    catch (err){ return toast("That file isn't valid JSON"); }
+    if (!Array.isArray(data)) return toast('Expected a template file with a list of tiles');
+
+    const tiles = data.map(normalise).filter(Boolean);
+    let base = file.name.replace(/\.json$/i,'').replace(/^events_/,'').replace(/_/g,' ').trim();
+    const name = uniqueName(base || 'Imported');
+    db.templates[db.current] = rootEvents();
+    db.templates[name] = tiles;
+    db.current = name; events = tiles; setSelection(-1); resetRootView();
+    save(); render(); buildTplList();
+    toast(`Imported ${tiles.length} tile${tiles.length === 1 ? '' : 's'}`);
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+});
+
+/* ---------- backup / restore ---------- */
+function downloadJSON(obj, filename){
+  const blob = new Blob([JSON.stringify(obj, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+document.getElementById('btnBackup').addEventListener('click', () => {
+  db.templates[db.current] = rootEvents();
+  const stamp = new Date().toISOString().slice(0,10);
+  downloadJSON({ chronoscale: 1, exported: new Date().toISOString(),
+                 current: db.current, templates: db.templates },
+               `chronoscale-backup-${stamp}.json`);
+  toast('Backup saved');
+});
+
+document.getElementById('btnRestore').addEventListener('click',
+  () => document.getElementById('restoreInput').click());
+
+document.getElementById('restoreInput').addEventListener('change', e => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let data;
+    try { data = JSON.parse(reader.result); }
+    catch (err){ return toast("That file isn't valid JSON"); }
+    if (!data || typeof data !== 'object' || !data.templates)
+      return toast('That looks like a single template, not a backup — use Import instead');
+
+    let added = 0, renamed = 0;
+    Object.keys(data.templates).forEach(name => {
+      const tiles = (data.templates[name] || []).map(normalise).filter(Boolean);
+      let target = name;
+      if (db.templates[target]){ target = uniqueName(name); renamed++; }
+      db.templates[target] = tiles;
+      added++;
+    });
+    save(); buildTplList();
+    toast(`Restored ${added} template${added===1?'':'s'}` +
+          (renamed ? ` (${renamed} renamed to avoid clashes)` : ''));
+  };
+  reader.readAsText(file);
+});
+
+/* ============================================================
+   Cloud sync via a private GitHub Gist
+   ============================================================ */
+const GIST_TOKEN_BAKED = '';
+const GIST_ID_BAKED    = '';
+
+const SYNC = {
+  FILE: 'chronoscale-sync.json',
+  API:  'https://api.github.com',
+  token:  Store.get('chronoscale.ghToken')  || GIST_TOKEN_BAKED || '',
+  gistId: Store.get('chronoscale.gistId')   || GIST_ID_BAKED    || '',
+  busy: false, timer: null, lastError: ''
+};
+
+function ensureMeta(){
+  if (!db.meta) db.meta = { updated:{}, deleted:{} };
+  if (!db.meta.updated) db.meta.updated = {};
+  if (!db.meta.deleted) db.meta.deleted = {};
+  return db.meta;
+}
+function touchTemplate(name){
+  const meta = ensureMeta();
+  meta.updated[name] = Date.now();
+  delete meta.deleted[name];
+}
+function tombstone(name){
+  const meta = ensureMeta();
+  meta.deleted[name] = Date.now();
+  delete meta.updated[name];
+}
+
+function syncConfigured(){ return !!SYNC.token; }
+
+async function ghFetch(path, opts = {}){
+  const r = await fetch(SYNC.API + path, {
+    ...opts,
+    headers: {
+      'Authorization': 'Bearer ' + SYNC.token,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(opts.headers || {})
+    }
+  });
+  if (r.status === 401) throw new Error('Token rejected — check it has the "gist" scope');
+  if (r.status === 404) throw new Error('Gist not found — check the sync code');
+  if (r.status === 403) throw new Error('GitHub rate limit or token lacks gist access');
+  if (!r.ok) throw new Error('GitHub error ' + r.status);
+  return r;
+}
+
+async function gistRead(){
+  if (!SYNC.gistId) return null;
+  const r = await ghFetch('/gists/' + SYNC.gistId);
+  const j = await r.json();
+  const f = j.files && j.files[SYNC.FILE];
+  if (!f) return null;
+  const text = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
+  try { return JSON.parse(text); } catch (e){ return null; }
+}
+
+async function gistWrite(payload){
+  const body = JSON.stringify({
+    description: 'Chronoscale sync',
+    files: { [SYNC.FILE]: { content: JSON.stringify(payload, null, 2) } }
+  });
+  if (SYNC.gistId){
+    await ghFetch('/gists/' + SYNC.gistId, { method:'PATCH', body });
+    return SYNC.gistId;
+  }
+  const r = await ghFetch('/gists', {
+    method:'POST',
+    body: JSON.stringify({
+      description: 'Chronoscale sync',
+      public: false,
+      files: { [SYNC.FILE]: { content: JSON.stringify(payload, null, 2) } }
+    })
+  });
+  const j = await r.json();
+  SYNC.gistId = j.id;
+  Store.set('chronoscale.gistId', SYNC.gistId);
+  return SYNC.gistId;
+}
+
+function mergeStores(local, remote){
+  const lm = local.meta  || {updated:{},deleted:{}};
+  const rm = remote.meta || {updated:{},deleted:{}};
+  const out = { current: local.current, templates: {}, meta: { updated:{}, deleted:{} } };
+
+  const names = new Set([...Object.keys(local.templates||{}),
+                         ...Object.keys(remote.templates||{}),
+                         ...Object.keys(lm.deleted||{}),
+                         ...Object.keys(rm.deleted||{})]);
+
+  for (const name of names){
+    const lU = (lm.updated||{})[name] || 0, rU = (rm.updated||{})[name] || 0;
+    const lD = (lm.deleted||{})[name] || 0, rD = (rm.deleted||{})[name] || 0;
+    const newestDelete = Math.max(lD, rD), newestUpdate = Math.max(lU, rU);
+
+    if (newestDelete && newestDelete > newestUpdate){
+      out.meta.deleted[name] = newestDelete;
+      continue;
+    }
+    const tiles = (rU > lU) ? (remote.templates||{})[name] : (local.templates||{})[name];
+    if (!tiles) continue;
+    out.templates[name] = tiles;
+    out.meta.updated[name] = newestUpdate || Date.now();
+  }
+
+  if (!out.templates[out.current]) out.current = Object.keys(out.templates)[0] || 'Default';
+  if (!Object.keys(out.templates).length){ out.templates = { Default: [] }; out.current = 'Default'; }
+  return out;
+}
+
+async function syncNow(notify){
+  if (!syncConfigured()){ if (notify) toast('Add your GitHub token first'); renderAuthSheet(); return; }
+  if (SYNC.busy) return;
+  SYNC.busy = true; SYNC.lastError = ''; renderAuthSheet();
+  try {
+    const remote = await gistRead();
+
+    db.templates[db.current] = rootEvents();
+    ensureMeta();
+
+    if (remote && remote.templates){
+      const before = JSON.stringify(db.templates);
+      db = mergeStores(db, remote);
+      if (JSON.stringify(db.templates) !== before){
+        events = (db.templates[db.current] || []).map(normalise).filter(Boolean);
+        resetRootView(); render();
+      }
+    }
+    await gistWrite({ chronoscale: 1, updated: Date.now(),
+                      current: db.current, templates: db.templates, meta: db.meta });
+
+    Store.set(LS_KEY, JSON.stringify(db));
+    Store.set('chronoscale.lastSync', String(Date.now()));
+    if (notify) toast('Synced');
+  } catch (e){
+    SYNC.lastError = String(e.message || e);
+    if (notify) toast(SYNC.lastError);
+  } finally {
+    SYNC.busy = false;
+    renderAuthSheet();
+  }
+}
+
+function scheduleSync(){
+  if (!syncConfigured()) return;
+  clearTimeout(SYNC.timer);
+  SYNC.timer = setTimeout(() => syncNow(false), 4000);
+}
+function syncToCloud(notify){ notify ? syncNow(true) : scheduleSync(); }
+
+function renderAuthSheet(){
+  const on = syncConfigured();
+  document.getElementById('ghToken').value = SYNC.token;
+  document.getElementById('gistId').value  = SYNC.gistId;
+  document.getElementById('authControls').style.display = on ? 'block' : 'none';
+
+  const last = Number(Store.get('chronoscale.lastSync') || 0);
+  const st = document.getElementById('syncStatus');
+  st.textContent =
+      SYNC.busy       ? 'Syncing…'
+    : SYNC.lastError  ? SYNC.lastError
+    : !on             ? 'Not set up yet'
+    : last            ? 'Last synced ' + new Date(last).toLocaleString()
+                      : 'Ready — tap Sync now';
+  st.style.color = SYNC.lastError ? '#ff8a8a' : 'var(--muted)';
+  if (!Store.persistent){
+    st.textContent += ' · this browser will not remember the token';
+  }
+}
+
+document.getElementById('btnSaveToken').addEventListener('click', () => {
+  SYNC.token  = document.getElementById('ghToken').value.trim();
+  SYNC.gistId = document.getElementById('gistId').value.trim();
+  Store.set('chronoscale.ghToken', SYNC.token);
+  Store.set('chronoscale.gistId',  SYNC.gistId);
+  SYNC.lastError = '';
+  renderAuthSheet();
+  if (SYNC.token) syncNow(true); else toast('Token cleared');
+});
+
+document.getElementById('btnCloudSyncNow').addEventListener('click', () => syncNow(true));
+
+document.getElementById('btnCopyGist').addEventListener('click', async () => {
+  if (!SYNC.gistId) return toast('Sync once first to create the gist');
+  try { await navigator.clipboard.writeText(SYNC.gistId); toast('Sync code copied'); }
+  catch (e){ toast(SYNC.gistId); }
+});
+
+document.getElementById('btnSignOut').addEventListener('click', () => {
+  SYNC.token = ''; SYNC.gistId = ''; SYNC.lastError = '';
+  Store.set('chronoscale.ghToken',''); Store.set('chronoscale.gistId','');
+  renderAuthSheet();
+  toast('Disconnected — your timelines stay on this device');
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && syncConfigured()) syncNow(false);
+});
+
+/* ---------- toast ---------- */
+let toastTimer = null;
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('on'), 1900);
+}
+
+/* ---------- boot ---------- */
+window.addEventListener('resize', () => render());
+setInterval(drawNow, 30000);
+setInterval(checkTaskAlerts, 10000);
+
+load();
+ensureMeta();
+resetRootView();
+render();
+updateNotificationBtn();
+
+if (!Store.persistent){
+  toast('This browser will not save locally — sync is your storage here');
+}
+if (syncConfigured()) syncNow(false);
+</script>
+</body>
+</html>
