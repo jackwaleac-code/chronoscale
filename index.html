@@ -198,8 +198,39 @@
     max-height:88vh; overflow-y:auto;
   }
   .sheet.on{transform:translateY(0);}
+  .sheet.dragging, .drawer.dragging{transition:none;}
+
+  /* Tile editor: opens at half height and stays see-through, so the
+     timeline underneath is still readable while editing. */
+  #sheetTile{
+    height:52vh; max-height:94vh;
+    background:rgba(29,32,39,.70);
+    -webkit-backdrop-filter:blur(18px) saturate(1.25);
+    backdrop-filter:blur(18px) saturate(1.25);
+    border-top:1px solid rgba(255,255,255,.14);
+    box-shadow:0 -10px 34px rgba(0,0,0,.45);
+    transition:transform .22s cubic-bezier(.32,.72,0,1),
+               height .24s cubic-bezier(.32,.72,0,1);
+  }
+  #sheetTile.expanded{height:94vh;}
+  #sheetTile .field label{color:#c3ccd6;}
+  #sheetTile input[type=text], #sheetTile textarea, #sheetTile .stepper{
+    background:rgba(15,17,22,.55);
+  }
+  #sheetTile .btn{background:rgba(60,66,78,.72);}
+  #sheetTile .btn.primary{background:var(--accent);}
+  #sheetTile .btn.danger{background:rgba(90,42,48,.8);}
+  #sheetTile .grip{background:var(--muted); opacity:.85;}
+
+  .scrim.light{background:rgba(0,0,0,.16);}
+
   .grip{width:36px; height:4px; border-radius:2px; background:var(--grid-major);
         margin:6px auto 12px; cursor:grab;}
+  .grip-hint{
+    text-align:center; font-size:10px; color:var(--muted);
+    letter-spacing:.05em; margin:-8px 0 10px; text-transform:uppercase;
+  }
+  #sheetTile.expanded .grip-hint{visibility:hidden;}
   .sheet h2{margin:0 0 14px; font-size:16px; font-weight:700;}
   .field{margin-bottom:14px;}
   .field label{display:block; font-size:11px; color:var(--muted);
@@ -415,6 +446,7 @@
 <!-- tile editor -->
 <div class="sheet" id="sheetTile">
   <div class="grip"></div>
+  <div class="grip-hint">scroll or swipe up for more</div>
   <h2 id="tileHeading">Tile details</h2>
   <div class="field">
     <label for="fTitle">Title</label>
@@ -475,10 +507,10 @@
     <label for="fNotes">Notes</label>
     <textarea id="fNotes" placeholder="Anything worth remembering"></textarea>
   </div>
-  <button class="btn primary" id="btnDone">Close</button>
   <button class="btn" id="btnOpenInside">Open inside</button>
   <button class="btn" id="btnDuplicate">Duplicate</button>
   <button class="btn danger" id="btnDelete">Delete tile</button>
+  <button class="btn primary" id="btnDone">Close</button>
 </div>
 
 <!-- all tiles in this view -->
@@ -536,7 +568,7 @@ const MIN_DUR = 1;
 const TICK_GAP = 40;                  
 const ZOOM_MAX = 48;
 const LS_KEY = 'chronoscale.v1';
-const BUILD = 'g5-manualscroll';
+const BUILD = 'g7-gestures';
 
 /* ---- gesture debug readout ---- */
 let GDBG = false;
@@ -590,6 +622,7 @@ let pxPerMin = 1.6;
 let selected = -1;
 let editing = -1;
 let lastTap = { time: 0, idx: -1 };
+let lastEmptyTap = null;
 let notifiedEvents = new Set();
 let zoomLocked = false;
 
@@ -1247,20 +1280,45 @@ function drawNow(){
   drawTiles(); 
 }
 
+/* Minutes covered by at least one tile, merging overlaps across lanes,
+   so two parallel tiles don't get counted as twice the busy time. */
+function busyMinutes(list, from, to){
+  const spans = list
+    .map(e => [Math.max(from, e.start_min), Math.min(to, e.end_min)])
+    .filter(([a, b]) => b > a)
+    .sort((a, b) => a[0] - b[0]);
+  let total = 0, curS = null, curE = null;
+  for (const [a, b] of spans){
+    if (curE === null){ curS = a; curE = b; continue; }
+    if (a <= curE) curE = Math.max(curE, b);
+    else { total += curE - curS; curS = a; curE = b; }
+  }
+  if (curE !== null) total += curE - curS;
+  return total;
+}
+
+function freeMinutes(){
+  const span = Math.max(0, dayEnd - dayStart);
+  return Math.max(0, span - busyMinutes(events, dayStart, dayEnd));
+}
+
 function renderChrome(){
   const total = events.reduce((s,e) => s + (e.end_min - e.start_min), 0);
+  const free = freeMinutes();
   const back = document.getElementById('btnBack');
   const nested = viewStack.length > 0;
   back.hidden = !nested;
 
+  const summary = `${events.length === 1 ? '1 tile' : events.length + ' tiles'}`
+                + ` · ${fmtDur(total)} planned · ${fmtDur(free)} free`;
+
   if (nested){
     document.getElementById('tplName').textContent = pathTitles().join(' › ');
-    document.getElementById('topInfo').textContent =
-      `${events.length === 1 ? '1 tile' : events.length + ' tiles'} · ${fmtDur(total)} planned`;
+    document.getElementById('topInfo').textContent = summary;
   } else {
     document.getElementById('tplName').textContent = db.current;
     document.getElementById('topInfo').textContent =
-      events.length ? `${events.length === 1 ? '1 tile' : events.length + ' tiles'} · ${fmtDur(total)} planned` : 'No tiles yet';
+      events.length ? summary : `No tiles yet · ${fmtDur(free)} free`;
   }
 }
 document.getElementById('btnBack').addEventListener('click', goBack);
@@ -1583,6 +1641,7 @@ function updateCreationFromPoint(clientY) {
     const targetEnd = Math.max(minStart + 1, currentYMin);
     const newEnd = clampResizeBottom(editing, snap(targetEnd, step));
     ev.end_min = Math.max(ev.start_min + 1, newEnd);
+    gridTick(canvasCreate, ev.end_min);
     updateTileDOM(editing);
     showBubble(`${fmt(ev.start_min)} – ${fmt(ev.end_min)} · ${fmtDur(ev.end_min - ev.start_min)}`, yOf(ev.end_min) + 8, ev.lane_bias|0);
   }
@@ -1616,6 +1675,12 @@ function onDown(e){
     const alignedStart = Math.max(6 * 60, snap(clickedMin, step));
     const initDur = 1;
 
+    const now = Date.now();
+    const isSecondTap = lastEmptyTap &&
+      now - lastEmptyTap.time < 450 &&
+      Math.hypot(pt.clientX - lastEmptyTap.x, pt.clientY - lastEmptyTap.y) < 44;
+    lastEmptyTap = { time: now, x: pt.clientX, y: pt.clientY };
+
     canvasCreate = {
       startYMin: alignedStart,
       lane: Math.min(clickedLane, laneCount() - 1),
@@ -1628,22 +1693,25 @@ function onDown(e){
       isTouch: e.type === 'touchstart'
     };
 
-    longPressTimer = setTimeout(() => {
-      if (canvasCreate && canvasCreate.maxMove <= 8 &&
-          scrollEl.scrollTop === canvasCreate.scroll0) {
-        canvasCreate.active = true;
-        vibrate(20);
-        const startM = canvasCreate.startYMin;
-        const endM = Math.min(dayEnd, canvasCreate.e0);
-        const newTile = makeTile(startM, endM, 'New tile', PALETTE[events.length % PALETTE.length]);
-        newTile.lane_bias = canvasCreate.lane;
-        events.push(newTile);
-        editing = events.length - 1;
-        setSelection(editing);
-        render();
-        updateTileDOM(editing);
-      }
-    }, 400);
+    /* Second tap on empty space starts the tile straight away, so you can
+       keep the finger down and drag out its length. */
+    if (isSecondTap){
+      lastEmptyTap = null;
+      canvasCreate.active = true;
+      vibrate(22);
+      const startM = canvasCreate.startYMin;
+      const newTile = makeTile(startM, Math.min(dayEnd, startM + 30), 'New tile',
+                               PALETTE[events.length % PALETTE.length]);
+      newTile.lane_bias = canvasCreate.lane;
+      events.push(newTile);
+      editing = events.length - 1;
+      events[editing].end_min = clampResizeBottom(editing, events[editing].end_min);
+      canvasCreate.lastCell = null;
+      setSelection(editing);
+      render();
+      updateTileDOM(editing);
+      gdbg('double tap -> new tile');
+    }
     return;
   }
 
@@ -1657,6 +1725,7 @@ function onDown(e){
       clearTimeout(tileEditTimer);
       drag = null;
       lastTap = { time: 0, idx: -1 };
+      vibrate(14);
       openChild(i);
       return;
     }
@@ -1800,18 +1869,22 @@ function onMove(e){
       if (!laneBlocked(probe, probe + dur, wanted, drag.i)){
         lane = wanted;
         ev.lane_bias = lane;
+        vibrate(12);
       }
     }
     const ns = Math.max(6 * 60, clampMoveInLane(drag.s0, drag.e0, deltaMin, lane, drag.i));
     ev.start_min = ns; ev.end_min = ns + dur;
+    gridTick(drag, ev.start_min);
     updateTileDOM(drag.i);
     showBubble(`${fmt(ev.start_min)} – ${fmt(ev.end_min)}`, yOf(ev.start_min) - 30, ev.lane_bias|0);
   } else if (drag.mode === 'top'){
     ev.start_min = Math.max(6 * 60, clampResizeTop(drag.i, snap(drag.s0 + deltaMin, step)));
+    gridTick(drag, ev.start_min);
     updateTileDOM(drag.i);
     showBubble(`${fmt(ev.start_min)} · ${fmtDur(ev.end_min - ev.start_min)}`, yOf(ev.start_min) - 30, ev.lane_bias|0);
   } else {
     ev.end_min = clampResizeBottom(drag.i, snap(drag.e0 + deltaMin, step));
+    gridTick(drag, ev.end_min);
     updateTileDOM(drag.i);
     showBubble(`${fmt(ev.end_min)} · ${fmtDur(ev.end_min - ev.start_min)}`, yOf(ev.end_min) + 8, ev.lane_bias|0);
   }
@@ -1846,10 +1919,12 @@ function onUp(e){
 
   gdbg('release: armed=' + active + ' moved=' + moved);
   if (!active) {
+    vibrate(4);
     setSelection(i);            // short tap
   } else if (moved) {
     save(); render(); vibrate(8);
   } else if (mode === 'move') {
+    vibrate(10);
     openTile(i);                // long press, released without moving
   } else {
     setSelection(i);
@@ -1869,6 +1944,15 @@ function showBubble(text, y, lane = 0){
   bubble.style.left = left + 'px';
 }
 function hideBubble(){ bubble.style.display = 'none'; }
+
+/* Small tick whenever a dragged edge crosses a gridline, so moving a tile
+   feels notched rather than slippery. */
+function gridTick(holder, edgeMin){
+  const unit = Math.max(1, tickStep());
+  const cell = Math.round(edgeMin / unit);
+  if (holder.lastCell != null && cell !== holder.lastCell) vibrate(4);
+  holder.lastCell = cell;
+}
 function unarmHandles(){
   canvas.querySelectorAll('.handle.armed').forEach(h => h.classList.remove('armed'));
 }
@@ -1885,39 +1969,110 @@ scrollEl.addEventListener('click', e => {
 });
 
 /* ============================================================
-   Swipe Gestures: Edge Swipe & Slide Down to Close
+   Swipe Gestures — the panel follows your finger, then settles
    ============================================================ */
 let globalTouch = null;
+let sheetDrag = null;
+
+function drawerWidth(){ return sheetList.getBoundingClientRect().width || 300; }
+
+function settle(el){
+  el.classList.remove('dragging');
+  el.style.transform = '';        // hand the position back to CSS, which animates it
+}
+
 window.addEventListener('touchstart', e => {
-  if (e.touches.length !== 1) return;
+  if (e.touches.length !== 1) { sheetDrag = null; return; }
   const t = e.touches[0];
   globalTouch = { x: t.clientX, y: t.clientY, time: Date.now() };
+
+  const openDrawer = document.querySelector('.drawer.on');
+  const openSheetEl = document.querySelector('.sheet.on');
+
+  if (openDrawer && openDrawer.contains(e.target)){
+    sheetDrag = { el: openDrawer, kind: 'drawer-close', x0: t.clientX, y0: t.clientY,
+                  t0: Date.now(), active: false };
+  } else if (openSheetEl && openSheetEl.contains(e.target) && openSheetEl.scrollTop <= 4){
+    sheetDrag = { el: openSheetEl, kind: 'sheet', x0: t.clientX, y0: t.clientY,
+                  t0: Date.now(), active: false };
+  } else if (!openDrawer && !openSheetEl && t.clientX <= 30){
+    sheetDrag = { el: sheetList, kind: 'drawer-open', x0: t.clientX, y0: t.clientY,
+                  t0: Date.now(), active: false, scroll0: scrollEl.scrollTop };
+  } else {
+    sheetDrag = null;
+  }
 }, { passive: true });
 
 window.addEventListener('touchmove', e => {
-  if (!globalTouch || e.touches.length !== 1) return;
+  if (!sheetDrag || e.touches.length !== 1) return;
   const t = e.touches[0];
-  const dx = t.clientX - globalTouch.x;
-  const dy = t.clientY - globalTouch.y;
+  const dx = t.clientX - sheetDrag.x0;
+  const dy = t.clientY - sheetDrag.y0;
 
-  const anyOpen = document.querySelector('.sheet.on, .drawer.on');
-  if (!anyOpen && globalTouch.x <= 40 && dx > 50 && Math.abs(dy) < 40) {
-    globalTouch = null;
-    openList();
+  if (!sheetDrag.active){
+    const wantsDown  = sheetDrag.kind === 'sheet'  && dy > 10 && dy > Math.abs(dx);
+    const wantsSide  = sheetDrag.kind !== 'sheet'  && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy);
+    if (!wantsDown && !wantsSide){
+      if (Math.hypot(dx, dy) > 14) sheetDrag = null;   // it was a scroll, let it go
+      return;
+    }
+    sheetDrag.active = true;
+    sheetDrag.el.classList.add('dragging');
+    if (sheetDrag.kind === 'drawer-open'){
+      // the timeline must not scroll out from under an edge swipe
+      pan = null; stopFlick(); clearTimeout(longPressTimer); drag = null; canvasCreate = null;
+      scrollEl.scrollTop = sheetDrag.scroll0;
+      buildTileList();
+      scrim.classList.add('on');
+      vibrate(8);
+    }
+  }
+
+  if (e.cancelable) e.preventDefault();
+
+  const w = drawerWidth();
+  if (sheetDrag.kind === 'sheet'){
+    sheetDrag.el.style.transform = `translateY(${Math.max(0, dy)}px)`;
+  } else if (sheetDrag.kind === 'drawer-open'){
+    sheetDrag.el.style.transform = `translateX(${Math.min(0, -w + Math.max(0, dx))}px)`;
+  } else {
+    sheetDrag.el.style.transform = `translateX(${Math.min(0, dx)}px)`;
+  }
+}, { passive: false });
+
+window.addEventListener('touchend', e => {
+  globalTouch = null;
+  if (!sheetDrag) return;
+  const sd = sheetDrag; sheetDrag = null;
+  if (!sd.active) return;
+
+  const t = e.changedTouches[0] || { clientX: sd.x0, clientY: sd.y0 };
+  const dx = t.clientX - sd.x0, dy = t.clientY - sd.y0;
+  const quick = Date.now() - sd.t0 < 260;
+  const w = drawerWidth();
+
+  if (sd.kind === 'sheet'){
+    const dismiss = dy > 90 || (quick && dy > 40);
+    settle(sd.el);
+    if (!dismiss) return;
+    if (sd.el === sheetTile && sd.el.classList.contains('expanded')) setTileSheetExpanded(false);
+    else closeSheets();
+    vibrate(6);
+  } else if (sd.kind === 'drawer-open'){
+    const open = dx > w * 0.4 || (quick && dx > 45);
+    settle(sd.el);
+    if (open){ openSheet(sheetList); vibrate(10); }
+    else if (!document.querySelector('.sheet.on, .drawer.on')) scrim.classList.remove('on');
+  } else {
+    const close = dx < -w * 0.35 || (quick && dx < -45);
+    settle(sd.el);
+    if (close){ closeSheets(); vibrate(6); }
   }
 }, { passive: true });
 
-window.addEventListener('touchend', e => {
-  if (!globalTouch) return;
-  const t = e.changedTouches[0];
-  const dy = t.clientY - globalTouch.y;
-  const dx = t.clientX - globalTouch.x;
-
-  const activeSheet = document.querySelector('.sheet.on');
-  if (activeSheet && dy > 80 && Math.abs(dx) < 60) {
-    closeSheets();
-  }
-  globalTouch = null;
+window.addEventListener('touchcancel', () => {
+  if (sheetDrag && sheetDrag.active) settle(sheetDrag.el);
+  sheetDrag = null; globalTouch = null;
 }, { passive: true });
 
 /* ============================================================
@@ -1929,9 +2084,19 @@ const sheetTpl  = document.getElementById('sheetTpl');
 const sheetAuth = document.getElementById('sheetAuth');
 const sheetSettings = document.getElementById('sheetSettings');
 
-function openSheet(el){ scrim.classList.add('on'); el.classList.add('on'); }
+function setTileSheetExpanded(on){
+  sheetTile.classList.toggle('expanded', on);
+}
+
+function openSheet(el){
+  scrim.classList.add('on');
+  scrim.classList.toggle('light', el === sheetTile);   // keep the timeline visible
+  el.classList.add('on');
+}
 function closeSheets(){
   scrim.classList.remove('on');
+  scrim.classList.remove('light');
+  setTileSheetExpanded(false);
   [sheetTile, sheetTpl, sheetList, sheetAuth, sheetSettings].forEach(s => s.classList.remove('on'));
   if (editing !== -1){ commitEdits(); editing = -1; }
 }
@@ -1952,6 +2117,24 @@ document.getElementById('btnOpenTemplates').addEventListener('click', () => {
   sheetSettings.classList.remove('on');
   openTemplates();
 });
+
+/* Scrolling inside the editor expands it; a swipe up does the same, and a
+   swipe down steps back to half height before closing. */
+sheetTile.addEventListener('scroll', () => {
+  if (sheetTile.scrollTop > 6) setTileSheetExpanded(true);
+}, {passive:true});
+
+(() => {
+  let sy = null;
+  sheetTile.addEventListener('touchstart', e => {
+    sy = e.touches.length === 1 ? e.touches[0].clientY : null;
+  }, {passive:true});
+  sheetTile.addEventListener('touchmove', e => {
+    if (sy === null || e.touches.length !== 1) return;
+    if (e.touches[0].clientY - sy < -24) setTileSheetExpanded(true);
+  }, {passive:true});
+  sheetTile.addEventListener('touchend', () => { sy = null; }, {passive:true});
+})();
 
 /* ---------- tile editor ---------- */
 function openTile(i){
@@ -1978,6 +2161,8 @@ function openTile(i){
   refreshSteppers();
   buildSwatches(ev.color);
   document.getElementById('btnOpenInside').textContent = 'Open inside';
+  setTileSheetExpanded(false);
+  sheetTile.scrollTop = 0;
   openSheet(sheetTile);
 }
 
@@ -2139,7 +2324,9 @@ function buildTileList(){
   const total = events.reduce((s,e) => s + (e.end_min - e.start_min), 0);
   document.getElementById('listHeading').textContent =
     viewStack.length ? pathTitles()[pathTitles().length-1] : 'All tiles';
-  document.getElementById('listSub').textContent = new Date().toLocaleDateString(undefined,{weekday:'long', month:'long', day:'numeric'});
+  document.getElementById('listSub').textContent =
+    new Date().toLocaleDateString(undefined,{weekday:'long', month:'long', day:'numeric'})
+    + ` · ${fmtDur(total)} planned · ${fmtDur(freeMinutes())} free`;
   box.innerHTML = '';
   if (!events.length){
     box.innerHTML = '<div class="empty">No tiles here yet.<br>Long press empty space to make one.</div>';
@@ -2232,21 +2419,6 @@ function buildTileList(){
 }
 document.getElementById('btnList').addEventListener('click', openList);
 document.getElementById('btnCloseList').addEventListener('click', closeSheets);
-
-(() => {
-  let sx = null, sy = null;
-  sheetList.addEventListener('touchstart', e => {
-    if (e.touches.length !== 1) return;
-    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-  }, {passive:true});
-  sheetList.addEventListener('touchend', e => {
-    if (sx === null) return;
-    const t = e.changedTouches[0];
-    const dx = t.clientX - sx, dy = t.clientY - sy;
-    if (dx < -55 && Math.abs(dy) < 45) closeSheets();
-    sx = sy = null;
-  }, {passive:true});
-})();
 
 /* ============================================================
    Templates
