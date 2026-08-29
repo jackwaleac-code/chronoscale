@@ -58,8 +58,8 @@
     flex:1; display:flex; flex-direction:column; position:relative; overflow:hidden;
   }
   #scroll{flex:1; overflow-y:auto; overflow-x:hidden; position:relative;
-          -webkit-overflow-scrolling:touch; touch-action:pan-y;}
-  #canvas{position:relative; width:100%; touch-action:pan-y;}
+          touch-action:none;}
+  #canvas{position:relative; width:100%; touch-action:none;}
   
   /* ---- minimap preview bar ---- */
   #minimap{
@@ -102,7 +102,7 @@
   .tile{
     position:absolute; border-radius:8px; z-index:2;
     transition: transform 0.16s cubic-bezier(0.2, 0, 0, 1);
-    touch-action:pan-y;
+    touch-action:none;
   }
   .tile-bg{
     position:absolute; inset:0; border-radius:8px; overflow:hidden;
@@ -166,7 +166,7 @@
   .handle{
     position:absolute; left:0; right:0; height:42px; z-index:10;
     display:flex; align-items:center; justify-content:center;
-    cursor:ns-resize; touch-action:pan-y;
+    cursor:ns-resize; touch-action:none;
   }
   .handle::after{
     content:''; width:38px; height:4px; border-radius:2px;
@@ -323,8 +323,6 @@
          padding:9px 15px; border-radius:9px; font-size:13px; z-index:40;
          opacity:0; pointer-events:none; transition:all .2s; max-width:86vw;}
   #toast.on{opacity:1; transform:translateX(-50%) translateY(0);}
-
-  #scroll.pinching, #canvas.pinching{touch-action:none;}
 
   #gdbg{position:fixed; left:6px; top:60px; z-index:39; display:none;
         background:rgba(15,17,22,.92); border:1px solid var(--grid-major);
@@ -538,7 +536,7 @@ const MIN_DUR = 1;
 const TICK_GAP = 40;                  
 const ZOOM_MAX = 48;
 const LS_KEY = 'chronoscale.v1';
-const BUILD = 'g4-pinch';
+const BUILD = 'g5-manualscroll';
 
 /* ---- gesture debug readout ---- */
 let GDBG = false;
@@ -1393,6 +1391,7 @@ window.addEventListener('touchstart', e => {
       hideBubble(); 
     }
     unarmHandles();
+    pan = null; stopFlick();
     lastTap = { time: 0, idx: -1 };   // a pinch must not read as a double tap
     setPinching(true);
     gdbg('pinch start (2 fingers)');
@@ -1406,6 +1405,7 @@ window.addEventListener('touchstart', e => {
     return;
   }
   onDown(e);
+  if (e.touches && e.touches.length === 1 && scrollEl.contains(e.target)) panStart(e);
 }, {passive:false, capture:true});
 
 window.addEventListener('touchmove', e => {
@@ -1421,6 +1421,7 @@ window.addEventListener('touchmove', e => {
       if (canvasCreate){ clearTimeout(longPressTimer); canvasCreate = null; hideBubble(); }
       unarmHandles();
       stopAutoScroll();
+      pan = null; stopFlick();
       setPinching(true);
       gdbg('pinch start (second finger)');
       const offset = touchMidY(e) - scrollEl.getBoundingClientRect().top;
@@ -1442,6 +1443,7 @@ window.addEventListener('touchmove', e => {
     return;
   }
   onMove(e);
+  panMove(e);
 }, {passive:false, capture:false});
 
 window.addEventListener('touchend', e => {
@@ -1449,13 +1451,76 @@ window.addEventListener('touchend', e => {
     if (pinch0) gdbg('pinch end');
     pinch0 = null; setPinching(false);
   }
-  if (!e.touches || e.touches.length === 0) onUp(e);
+  if (!e.touches || e.touches.length === 0){ onUp(e); panEnd(); }
 }, {passive:false, capture:false});
 
 window.addEventListener('touchcancel', e => {
   if (!e.touches || e.touches.length < 2){ pinch0 = null; setPinching(false); }
-  if (!e.touches || e.touches.length === 0) onUp(e);
+  if (!e.touches || e.touches.length === 0){ onUp(e); pan = null; }
 }, {passive:false, capture:false});
+
+/* ============================================================
+   Touch: one-finger scrolling, done by hand
+   ------------------------------------------------------------
+   The timeline uses touch-action:none so the browser can never claim the
+   gesture — that is what keeps pinch-to-zoom working on top of tiles. The
+   cost is that vertical scrolling is ours to implement, below.
+   ============================================================ */
+let pan = null;
+let flickRAF = null;
+
+function stopFlick(){ if (flickRAF){ cancelAnimationFrame(flickRAF); flickRAF = null; } }
+function maxScrollTop(){ return Math.max(0, canvas.clientHeight - scrollEl.clientHeight); }
+function setScroll(v){ scrollEl.scrollTop = Math.max(0, Math.min(maxScrollTop(), v)); }
+
+function panStart(e){
+  stopFlick();
+  const pt = getPt(e);
+  pan = { y0: pt.clientY, top0: scrollEl.scrollTop,
+          lastY: pt.clientY, lastT: Date.now(), vy: 0, active: false };
+}
+
+function panMove(e){
+  if (!pan || pinch0) return;
+  if (drag && drag.active) return;                  // moving or resizing a tile
+  if (canvasCreate && canvasCreate.active) return;  // drawing a new tile
+  const pt = getPt(e);
+  const dy = pt.clientY - pan.y0;
+
+  if (!pan.active){
+    if (Math.abs(dy) < 8) return;
+    // Start from here so the content doesn't jump by the slop distance.
+    pan.active = true;
+    pan.y0 = pt.clientY; pan.top0 = scrollEl.scrollTop;
+    pan.lastY = pt.clientY; pan.lastT = Date.now();
+    gdbg('  scrolling');
+    return;
+  }
+
+  const now = Date.now();
+  const dt = Math.max(1, now - pan.lastT);
+  pan.vy = (pan.lastY - pt.clientY) / dt;           // px per ms, + = downward
+  pan.lastY = pt.clientY; pan.lastT = now;
+  setScroll(pan.top0 - (pt.clientY - pan.y0));
+  if (e.cancelable) e.preventDefault();
+}
+
+function panEnd(){
+  if (!pan) return;
+  const v = pan.active ? pan.vy : 0;
+  pan = null;
+  if (Math.abs(v) < 0.08) return;                   // not a flick
+  let vy = Math.max(-40, Math.min(40, v * 16));     // px per frame
+  const step = () => {
+    vy *= 0.94;
+    if (Math.abs(vy) < 0.4){ flickRAF = null; return; }
+    const before = scrollEl.scrollTop;
+    setScroll(before + vy);
+    if (scrollEl.scrollTop === before){ flickRAF = null; return; }
+    flickRAF = requestAnimationFrame(step);
+  };
+  flickRAF = requestAnimationFrame(step);
+}
 
 /* ============================================================
    Touch: Drag, Long-press & Handle Resizing
