@@ -157,6 +157,24 @@
                 border-style:solid; border-width:0 0 14px 14px;
                 border-color:transparent transparent rgba(0,0,0,.42) transparent; z-index:3;}
 
+  @keyframes jiggle {
+    0%   { transform: rotate(-0.75deg); }
+    50%  { transform: rotate(0.75deg); }
+    100% { transform: rotate(-0.75deg); }
+  }
+  .tile.jiggle{ animation: jiggle .17s ease-in-out infinite; }
+  .tile.jiggle .tile-bg{ box-shadow:0 0 0 2px rgba(229,72,77,.9), 0 6px 18px rgba(0,0,0,.5); }
+
+  .tile-del{
+    position:absolute; left:-8px; top:-8px; width:23px; height:23px;
+    border-radius:50%; background:#e5484d; color:#fff;
+    border:1.5px solid rgba(0,0,0,.4);
+    display:flex; align-items:center; justify-content:center;
+    font-size:13px; font-weight:800; line-height:1; z-index:9;
+    pointer-events:auto; box-shadow:0 2px 7px rgba(0,0,0,.55);
+  }
+  .tile-del:active{ transform:scale(.88); }
+
   .tile-map-link {
     position: absolute; right: 6px; bottom: 5px; font-size: 13px; z-index: 4;
     text-decoration: none; line-height: 1; pointer-events: auto; opacity: 0.85;
@@ -530,6 +548,7 @@
     <div>
       <h2 id="listHeading">All tiles</h2>
       <div class="drawer-sub" id="listSub">—</div>
+      <div class="drawer-sub" id="listStats">—</div>
     </div>
     <button class="iconbtn" id="btnCloseList" aria-label="Close list">✕</button>
   </div>
@@ -590,7 +609,7 @@ const MIN_DUR = 1;
 const TICK_GAP = 40;                  
 const ZOOM_MAX = 48;
 const LS_KEY = 'chronoscale.v1';
-const BUILD = 'g9-taps';
+const BUILD = 'g10-shake';
 
 /* ---- gesture debug readout ---- */
 let GDBG = false;
@@ -646,6 +665,24 @@ let editing = -1;
 let lastTap = { time: 0, idx: -1, count: 0 };
 let lastEmptyTap = null;
 let tapActionTimer = null;
+let jiggleIdx = -1;          // tile currently shaking with a delete badge
+
+function setJiggle(idx){
+  if (jiggleIdx === idx) return;
+  jiggleIdx = idx;
+  drawTiles();
+}
+
+function deleteTileAt(i){
+  if (i < 0 || i >= events.length) return;
+  events.splice(i, 1);
+  jiggleIdx = -1;
+  if (editing === i) editing = -1;
+  setSelection(-1);
+  vibrate(26);
+  save(); render();
+  toast('Tile deleted');
+}
 let notifiedEvents = new Set();
 let zoomLocked = false;
 
@@ -677,7 +714,7 @@ function openChild(i){
                    scroll: scrollEl.scrollTop, title: ev.title, tile: ev });
   events = ev.children;
   dayStart = ev.start_min; dayEnd = ev.end_min;
-  selected = -1; editing = -1;
+  selected = -1; editing = -1; jiggleIdx = -1;
   pxPerMin = fitZoom();
   render();
   scrollEl.scrollTop = 0;
@@ -688,7 +725,7 @@ function goBack(){
   if (!viewStack.length) return;
   const s = viewStack.pop();
   events = s.events; dayStart = s.start; dayEnd = s.end;
-  pxPerMin = s.zoom; selected = -1; editing = -1;
+  pxPerMin = s.zoom; selected = -1; editing = -1; jiggleIdx = -1;
   render();
   scrollEl.scrollTop = s.scroll;
 }
@@ -1130,6 +1167,16 @@ function drawTiles(){
       mapBtn.title = 'Open location in Google Maps';
       mapBtn.addEventListener('click', e => e.stopPropagation());
       el.appendChild(mapBtn);
+    }
+
+    if (i === jiggleIdx){
+      el.classList.add('jiggle');
+      const x = document.createElement('div');
+      x.className = 'tile-del';
+      x.dataset.i = i;
+      x.textContent = '✕';
+      x.setAttribute('aria-label', 'Delete ' + ev.title);
+      el.appendChild(x);
     }
 
     if (ev.counter > 0){
@@ -1695,6 +1742,16 @@ function onDown(e){
   if (e.type === 'mousedown' && isTouch) return;
   if (e.touches && e.touches.length > 1) return;
 
+  const delBadge = e.target.closest('.tile-del');
+  if (delBadge){
+    clearTimeout(longPressTimer); clearTimeout(tileEditTimer); clearTimeout(tapActionTimer);
+    drag = null; canvasCreate = null; pan = null;
+    if (e.cancelable) e.preventDefault();
+    gdbg('delete badge tapped');
+    deleteTileAt(parseInt(delBadge.dataset.i, 10));
+    return;
+  }
+
   const handle = e.target.closest('.handle');
   const tile   = e.target.closest('.tile');
   const pt = getPt(e);
@@ -1709,6 +1766,8 @@ function onDown(e){
     const step = 1;
     const alignedStart = Math.max(6 * 60, snap(clickedMin, step));
     const initDur = 1;
+
+    if (jiggleIdx !== -1) setJiggle(-1);   // tap off the tile to stop shaking
 
     const now = Date.now();
     const isSecondTap = lastEmptyTap &&
@@ -1755,6 +1814,7 @@ function onDown(e){
 
   if (!handle) {
     const now = Date.now();
+    if (jiggleIdx !== -1 && jiggleIdx !== i) setJiggle(-1);
     const chained = lastTap.idx === i && now - lastTap.time < 450;
     lastTap = { time: now, idx: i, count: chained ? (lastTap.count || 1) + 1 : 1 };
 
@@ -1833,8 +1893,8 @@ function onDown(e){
       }
     }, 350);
 
-    /* Still holding, still hasn't moved: they want the menu, not a drag.
-       Opens under the finger — no need to lift off. */
+    /* Keep holding well past the drag and the tile starts shaking with a
+       delete badge, the way home-screen icons do. */
     clearTimeout(tileEditTimer);
     tileEditTimer = setTimeout(() => {
       if (!drag || drag.moved || drag.maxMove > 8) return;
@@ -1843,12 +1903,11 @@ function onDown(e){
       clearTimeout(longPressTimer);
       if (drag.el) drag.el.classList.remove('drag');
       drag = null;
-      pan = null; stopFlick();      // the finger is now on the sheet, not the timeline
       hideBubble();
       vibrate(24);
-      gdbg('  long press -> editor');
-      openTile(idx);
-    }, 650);
+      gdbg('  long press -> shake to delete');
+      setJiggle(idx);
+    }, 900);
   }
 }
 
@@ -1996,8 +2055,7 @@ function onUp(e){
   } else if (moved) {
     save(); render(); vibrate(8);
   } else if (mode === 'move') {
-    vibrate(10);
-    openTile(i);                // long press, released without moving
+    setSelection(i);            // armed but released without moving
   } else {
     setSelection(i);
   }
@@ -2237,6 +2295,7 @@ sheetTile.addEventListener('scroll', () => {
 
 /* ---------- tile editor ---------- */
 function openTile(i){
+  jiggleIdx = -1;
   editing = i; setSelection(i);
   const ev = events[i];
   document.getElementById('fTitle').value = ev.title;
@@ -2424,8 +2483,9 @@ function buildTileList(){
   document.getElementById('listHeading').textContent =
     viewStack.length ? pathTitles()[pathTitles().length-1] : 'All tiles';
   document.getElementById('listSub').textContent =
-    new Date().toLocaleDateString(undefined,{weekday:'long', month:'long', day:'numeric'})
-    + ` · ${fmtDur(total)} planned · ${fmtDur(freeMinutes())} free`;
+    new Date().toLocaleDateString(undefined,{weekday:'long', month:'long', day:'numeric'});
+  document.getElementById('listStats').textContent =
+    `${fmtDur(total)} planned · ${fmtDur(freeMinutes())} free`;
   box.innerHTML = '';
   if (!events.length){
     box.innerHTML = '<div class="empty">No tiles here yet.<br>Long press empty space to make one.</div>';
