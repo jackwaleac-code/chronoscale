@@ -304,7 +304,14 @@
   .drawer-head>div:first-child{flex:1; min-width:0;}
   .drawer-sub{font-size:11px; color:var(--muted); margin-top:3px;}
   .drawer-body{flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
-               padding:12px 12px calc(16px + env(safe-area-inset-bottom,0px));}
+               padding:12px 12px 12px;}
+  .drawer-foot{
+    flex:none; border-top:1px solid var(--line);
+    padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));
+    background:var(--panel);
+  }
+  .drawer-foot .btn{margin-bottom:8px; text-align:left; padding-left:14px;}
+  .drawer-foot .btn:last-child{margin-bottom:0;}
 
   .trow{display:flex; align-items:center; gap:8px; padding:11px 10px;
         border-radius:10px; background:var(--bg); margin-bottom:8px; cursor:pointer;}
@@ -362,6 +369,11 @@
         line-height:1.5; color:#9ecf63; white-space:pre-wrap; pointer-events:none;}
   #gdbg.on{display:block;}
 
+  #hapticLabel, #hapticSwitch{
+    position:fixed; bottom:0; left:-64px; width:36px; height:22px;
+    opacity:0; pointer-events:none; margin:0; z-index:-1;
+  }
+
   @media (prefers-reduced-motion:reduce){*{transition:none !important;}}
 </style>
 </head>
@@ -374,8 +386,6 @@
     <div id="tplName">Default</div>
     <div id="topInfo">—</div>
   </div>
-  <button class="iconbtn" id="btnLockZoom" aria-label="Lock zoom" title="Lock zoom">🔒</button>
-  <button class="iconbtn" id="btnSettings" aria-label="Settings" title="Settings">⚙️</button>
 </header>
 
 <div id="timeline-container">
@@ -400,6 +410,7 @@
   <div class="grip"></div>
   <h2>Settings</h2>
   <p class="hint" id="buildTag">build —</p>
+  <button class="btn" id="btnTestHaptic">Test haptic feedback</button>
   <button class="btn" id="btnGestureDebug">Gesture debug: off</button>
   <button class="btn" id="btnEnableNotifications">Enable start notifications</button>
   <button class="btn" id="btnOpenAuth">Cloud sync</button>
@@ -525,6 +536,10 @@
   <div class="drawer-body">
     <div id="tileList"></div>
   </div>
+  <div class="drawer-foot">
+    <button class="btn" id="btnLockZoom">🔒  Zoom unlocked</button>
+    <button class="btn" id="btnSettings">⚙️  Settings</button>
+  </div>
 </aside>
 
 <!-- templates -->
@@ -552,6 +567,13 @@
 <div id="toast"></div>
 <div id="gdbg"></div>
 
+<!-- iOS has no Vibration API. Toggling a <input type="checkbox" switch> is the
+     only thing that reaches the Taptic Engine from a web page, so this hidden
+     pair gets clicked whenever we want a buzz. It must stay rendered — display:none
+     kills the effect — so it is parked off-screen instead. -->
+<label id="hapticLabel" for="hapticSwitch" aria-hidden="true"></label>
+<input type="checkbox" switch id="hapticSwitch" tabindex="-1" aria-hidden="true">
+
 <script>
 "use strict";
 
@@ -568,7 +590,7 @@ const MIN_DUR = 1;
 const TICK_GAP = 40;                  
 const ZOOM_MAX = 48;
 const LS_KEY = 'chronoscale.v1';
-const BUILD = 'g7-gestures';
+const BUILD = 'g9-taps';
 
 /* ---- gesture debug readout ---- */
 let GDBG = false;
@@ -621,8 +643,9 @@ let viewStack = [];
 let pxPerMin = 1.6;       
 let selected = -1;
 let editing = -1;
-let lastTap = { time: 0, idx: -1 };
+let lastTap = { time: 0, idx: -1, count: 0 };
 let lastEmptyTap = null;
+let tapActionTimer = null;
 let notifiedEvents = new Set();
 let zoomLocked = false;
 
@@ -768,6 +791,14 @@ function updateNotificationBtn() {
 document.getElementById('btnEnableNotifications').addEventListener('click', requestNotificationPermission);
 
 document.getElementById('buildTag').textContent = 'build ' + BUILD;
+document.getElementById('btnTestHaptic').addEventListener('click', () => {
+  Haptics.fire(18, true);
+  setTimeout(() => Haptics.fire(18, true), 160);
+  setTimeout(() => Haptics.fire(30, true), 320);
+  toast(typeof navigator.vibrate === 'function'
+    ? 'Sent three buzzes via the Vibration API'
+    : 'Sent three taps via the iOS switch trick — silent means your iOS blocks it');
+});
 document.getElementById('btnGestureDebug').addEventListener('click', () => {
   GDBG = !GDBG;
   document.getElementById('gdbg').classList.toggle('on', GDBG);
@@ -1337,7 +1368,9 @@ scrollEl.addEventListener('scroll', () => {
   /* The list really moved, so the finger is scrolling — abandon any press
      that hasn't armed yet. Active drags scroll themselves at the edges. */
   if (typeof drag !== 'undefined' && drag && !drag.active){
-    clearTimeout(longPressTimer); unarmHandles(); drag = null;
+    clearTimeout(longPressTimer); clearTimeout(tileEditTimer);
+    clearTimeout(tapActionTimer);
+    unarmHandles(); drag = null;
     gdbg('  list scrolled -> press dropped');
   }
   if (typeof canvasCreate !== 'undefined' && canvasCreate && !canvasCreate.active){
@@ -1358,7 +1391,8 @@ const btnLockZoom = document.getElementById('btnLockZoom');
 btnLockZoom.addEventListener('click', () => {
   zoomLocked = !zoomLocked;
   btnLockZoom.classList.toggle('locked', zoomLocked);
-  btnLockZoom.textContent = zoomLocked ? '🔓' : '🔒';
+  btnLockZoom.textContent = zoomLocked ? '🔓  Zoom locked' : '🔒  Zoom unlocked';
+  vibrate(10);
   toast(zoomLocked ? 'Zoom locked' : 'Zoom unlocked');
 });
 
@@ -1450,7 +1484,8 @@ window.addEventListener('touchstart', e => {
     }
     unarmHandles();
     pan = null; stopFlick();
-    lastTap = { time: 0, idx: -1 };   // a pinch must not read as a double tap
+    clearTimeout(tapActionTimer);
+    lastTap = { time: 0, idx: -1, count: 0 };   // a pinch must not read as a double tap
     setPinching(true);
     gdbg('pinch start (2 fingers)');
     const offset = touchMidY(e) - scrollEl.getBoundingClientRect().top;
@@ -1700,7 +1735,7 @@ function onDown(e){
       canvasCreate.active = true;
       vibrate(22);
       const startM = canvasCreate.startYMin;
-      const newTile = makeTile(startM, Math.min(dayEnd, startM + 30), 'New tile',
+      const newTile = makeTile(startM, Math.min(dayEnd, startM + 1), 'New tile',
                                PALETTE[events.length % PALETTE.length]);
       newTile.lane_bias = canvasCreate.lane;
       events.push(newTile);
@@ -1720,16 +1755,33 @@ function onDown(e){
 
   if (!handle) {
     const now = Date.now();
-    if (lastTap.idx === i && now - lastTap.time < 450) {
+    const chained = lastTap.idx === i && now - lastTap.time < 450;
+    lastTap = { time: now, idx: i, count: chained ? (lastTap.count || 1) + 1 : 1 };
+
+    if (lastTap.count >= 2){
       clearTimeout(longPressTimer);
       clearTimeout(tileEditTimer);
+      clearTimeout(tapActionTimer);
       drag = null;
-      lastTap = { time: 0, idx: -1 };
-      vibrate(14);
-      openChild(i);
+      hideBubble();
+
+      if (lastTap.count >= 3){
+        lastTap = { time: 0, idx: -1, count: 0 };
+        vibrate(16);
+        gdbg('triple tap -> inside');
+        openChild(i);
+      } else {
+        /* Hold the menu back briefly in case a third tap is on its way. */
+        const idx = i;
+        tapActionTimer = setTimeout(() => {
+          lastTap = { time: 0, idx: -1, count: 0 };
+          vibrate(10);
+          gdbg('double tap -> editor');
+          openTile(idx);
+        }, 260);
+      }
       return;
     }
-    lastTap = { time: now, idx: i };
 
     if (selected !== i && e.type !== 'touchstart') { 
       setSelection(i); 
@@ -1780,6 +1832,23 @@ function onDown(e){
         gdbg('  ARMED move');
       }
     }, 350);
+
+    /* Still holding, still hasn't moved: they want the menu, not a drag.
+       Opens under the finger — no need to lift off. */
+    clearTimeout(tileEditTimer);
+    tileEditTimer = setTimeout(() => {
+      if (!drag || drag.moved || drag.maxMove > 8) return;
+      if (Math.abs(scrollEl.scrollTop - drag.scroll0) > 2) return;
+      const idx = drag.i;
+      clearTimeout(longPressTimer);
+      if (drag.el) drag.el.classList.remove('drag');
+      drag = null;
+      pan = null; stopFlick();      // the finger is now on the sheet, not the timeline
+      hideBubble();
+      vibrate(24);
+      gdbg('  long press -> editor');
+      openTile(idx);
+    }, 650);
   }
 }
 
@@ -1817,6 +1886,7 @@ function onMove(e){
 
   if (drag.pendingActive && dist > 8) {
     clearTimeout(longPressTimer);
+    clearTimeout(tileEditTimer);
     drag.pendingActive = false;
     unarmHandles();
     drag = null;
@@ -1827,6 +1897,7 @@ function onMove(e){
   if (!drag.active) {
     if (dist > 8) {
       clearTimeout(longPressTimer);
+      clearTimeout(tileEditTimer);
       drag = null;
       gdbg('  moved ' + Math.round(dist) + 'px -> released to scroll');
     }
@@ -1851,6 +1922,7 @@ function onMove(e){
     if (Math.abs(dy) < 3 && Math.abs(dx) < 3 && drag.mode !== 'move') return;
     drag.moved = true;
     clearTimeout(tileEditTimer);
+    clearTimeout(longPressTimer);
   }
 
   const ev = events[drag.i];
@@ -1956,7 +2028,33 @@ function gridTick(holder, edgeMin){
 function unarmHandles(){
   canvas.querySelectorAll('.handle.armed').forEach(h => h.classList.remove('armed'));
 }
-function vibrate(ms){ try { navigator.vibrate && navigator.vibrate(ms); } catch(e){} }
+/* Haptics: navigator.vibrate where it exists (Android), otherwise the iOS
+   switch-toggle trick. Note Apple closed the programmatic path in iOS 26.5,
+   so on very recent iOS this may stay silent — Settings has a test button. */
+const Haptics = (() => {
+  let last = 0, label = null;
+  function switchPulse(){
+    if (!label) label = document.getElementById('hapticLabel');
+    if (!label) return false;
+    try { label.click(); return true; } catch(e){ return false; }
+  }
+  return {
+    supported(){
+      return (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function')
+             || !!document.getElementById('hapticLabel');
+    },
+    fire(ms, force){
+      const now = Date.now();
+      if (!force && now - last < 28) return;   // don't machine-gun the taptic engine
+      last = now;
+      try {
+        if (typeof navigator.vibrate === 'function' && navigator.vibrate(ms)) return;
+      } catch(e){}
+      switchPulse();
+    }
+  };
+})();
+function vibrate(ms){ Haptics.fire(ms); }
 
 canvas.addEventListener('mousedown',  onDown);
 window.addEventListener('mousemove',  onMove);
@@ -2104,6 +2202,7 @@ scrim.addEventListener('click', closeSheets);
 
 /* ---------- settings sheet handlers ---------- */
 document.getElementById('btnSettings').addEventListener('click', () => {
+  sheetList.classList.remove('on');
   openSheet(sheetSettings);
 });
 
