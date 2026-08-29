@@ -324,6 +324,8 @@
          opacity:0; pointer-events:none; transition:all .2s; max-width:86vw;}
   #toast.on{opacity:1; transform:translateX(-50%) translateY(0);}
 
+  #scroll.pinching, #canvas.pinching{touch-action:none;}
+
   #gdbg{position:fixed; left:6px; top:60px; z-index:39; display:none;
         background:rgba(15,17,22,.92); border:1px solid var(--grid-major);
         border-radius:7px; padding:6px 8px; max-width:70vw;
@@ -536,7 +538,7 @@ const MIN_DUR = 1;
 const TICK_GAP = 40;                  
 const ZOOM_MAX = 48;
 const LS_KEY = 'chronoscale.v1';
-const BUILD = 'g3-hold';
+const BUILD = 'g4-pinch';
 
 /* ---- gesture debug readout ---- */
 let GDBG = false;
@@ -1221,7 +1223,7 @@ function updateMinimap(){
   viewport.style.height = Math.max(16, vpHeight) + 'px';
 }
 
-function drawNow(){
+function positionNow(){
   const m = nowMin();
   const inView = m >= dayStart && m <= dayEnd;
   nowEl.style.display = inView ? 'block' : 'none';
@@ -1231,6 +1233,19 @@ function drawNow(){
   nowEl.style.top = y + 'px';
   nowLabel.style.top = y + 'px';
   nowLabel.textContent = fmt(m).replace(' ','');
+}
+
+/* Move the existing tile elements instead of rebuilding them. Rebuilding
+   detaches whatever node the finger is touching, which silently kills the
+   rest of the gesture, so anything running mid-touch must use this. */
+function layoutTiles(){
+  const nodes = canvas.querySelectorAll('.tile');
+  if (nodes.length !== events.length){ drawTiles(); return; }
+  for (let i = 0; i < events.length; i++) updateTileDOM(i);
+}
+
+function drawNow(){
+  positionNow();
   drawTiles(); 
 }
 
@@ -1341,7 +1356,11 @@ function zoomTo(next, anchorMin, offsetPx){
   const clamped = Math.max(minZoom(), Math.min(ZOOM_MAX, next));
   if (Math.abs(clamped - pxPerMin) < 0.0005) return;
   pxPerMin = clamped;
-  render();
+  canvas.style.height = (TOP_PAD_PX + yOf(dayEnd) + 24) + 'px';
+  drawGrid();
+  layoutTiles();
+  positionNow();
+  updateMinimap();
   const maxScroll = Math.max(0, canvas.clientHeight - scrollEl.clientHeight);
   const targetScroll = Math.max(0, Math.min(maxScroll, yOf(anchorMin) - offsetPx));
   scrollEl.scrollTop = targetScroll;
@@ -1349,6 +1368,11 @@ function zoomTo(next, anchorMin, offsetPx){
 
 let pinch0 = null;
 let pinchRAF = null;
+
+function setPinching(on){
+  scrollEl.classList.toggle('pinching', on);
+  canvas.classList.toggle('pinching', on);
+}
 
 function touchMidY(e){ return (e.touches[0].clientY + e.touches[1].clientY) / 2; }
 function touchDist(e){
@@ -1365,10 +1389,13 @@ window.addEventListener('touchstart', e => {
     if (canvasCreate) { canvasCreate = null; hideBubble(); }
     if (drag){ 
       if (drag.el) drag.el.classList.remove('drag');
-      unarmHandles();
       drag = null; 
       hideBubble(); 
     }
+    unarmHandles();
+    lastTap = { time: 0, idx: -1 };   // a pinch must not read as a double tap
+    setPinching(true);
+    gdbg('pinch start (2 fingers)');
     const offset = touchMidY(e) - scrollEl.getBoundingClientRect().top;
     pinch0 = { 
       d: touchDist(e), 
@@ -1385,6 +1412,17 @@ window.addEventListener('touchmove', e => {
   if (!zoomLocked && e.touches && e.touches.length >= 2){
     if (e.cancelable) e.preventDefault();
     if (!pinch0){
+      if (drag){
+        if (drag.el) drag.el.classList.remove('drag');
+        clearTimeout(longPressTimer);
+        drag = null;
+        hideBubble();
+      }
+      if (canvasCreate){ clearTimeout(longPressTimer); canvasCreate = null; hideBubble(); }
+      unarmHandles();
+      stopAutoScroll();
+      setPinching(true);
+      gdbg('pinch start (second finger)');
       const offset = touchMidY(e) - scrollEl.getBoundingClientRect().top;
       pinch0 = { 
         d: touchDist(e), 
@@ -1407,12 +1445,15 @@ window.addEventListener('touchmove', e => {
 }, {passive:false, capture:false});
 
 window.addEventListener('touchend', e => {
-  if (e.touches.length < 2) pinch0 = null;
+  if (e.touches.length < 2){
+    if (pinch0) gdbg('pinch end');
+    pinch0 = null; setPinching(false);
+  }
   if (!e.touches || e.touches.length === 0) onUp(e);
 }, {passive:false, capture:false});
 
 window.addEventListener('touchcancel', e => {
-  if (e.touches && e.touches.length < 2) pinch0 = null;
+  if (!e.touches || e.touches.length < 2){ pinch0 = null; setPinching(false); }
   if (!e.touches || e.touches.length === 0) onUp(e);
 }, {passive:false, capture:false});
 
@@ -1714,6 +1755,7 @@ function onMove(e){
 function onUp(e){
   clearTimeout(tileEditTimer);
   stopAutoScroll();
+  setPinching(false);
 
   if (canvasCreate){
     clearTimeout(longPressTimer);
@@ -2532,7 +2574,10 @@ function toast(msg){
 
 /* ---------- boot ---------- */
 window.addEventListener('resize', () => render());
-setInterval(drawNow, 30000);
+setInterval(() => {
+  if (drag || pinch0 || canvasCreate) { positionNow(); return; }
+  drawNow();
+}, 30000);
 setInterval(checkTaskAlerts, 10000);
 
 load();
