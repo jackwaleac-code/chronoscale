@@ -37,7 +37,7 @@
   header{
     display:flex; align-items:center; gap:10px;
     padding:10px 12px; background:var(--panel);
-    border-bottom:1px solid var(--line); flex:none; z-index:10;
+    border-bottom:1px solid var(--line); flex:none;
   }
   #tplName{font-weight:700; font-size:15px;
            overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
@@ -101,18 +101,20 @@
   /* --- structural tiles --- */
   .tile{
     position:absolute; border-radius:8px; z-index:2;
+    transition: transform 0.16s cubic-bezier(0.2, 0, 0, 1);
+    touch-action:none;
   }
   .tile-bg{
     position:absolute; inset:0; border-radius:8px; overflow:hidden;
     opacity: 0.35; backdrop-filter: blur(8px);
     transition:box-shadow .12s, opacity .2s, filter .2s;
-    z-index:1; pointer-events:none;
+    z-index:1;
   }
   .tile.past .tile-bg{opacity:0.15; filter:grayscale(40%);}
   .tile.sel{z-index:5;}
   .tile.sel .tile-bg{box-shadow:0 0 0 2px var(--text), 0 6px 16px rgba(0,0,0,.5); opacity: 0.55;}
   
-  .tile.drag{z-index:8; transform: scale(1.02);}
+  .tile.drag{z-index:8; transform: scale(1.02); touch-action:none;}
   .tile.drag .tile-bg { box-shadow: 0 12px 28px rgba(0,0,0,.65); filter: brightness(1.1); opacity: 0.55; }
   
   .t-sticky {
@@ -147,13 +149,13 @@
   
   .tile.short .t-sticky {padding-top:2px;}
   .tile.short .t-time, .tile.short .t-dur{display:none;}
-  .tile .badge{position:absolute; right:5px; bottom:5px; background:rgba(0,0,0,.45);
+  .tile .badge{position:absolute; right:5px; top:5px; background:rgba(0,0,0,.45);
                color:#fff; font-size:10px; font-weight:700; border-radius:999px;
                min-width:17px; height:17px; padding:0 5px;
-               display:flex; align-items:center; justify-content:center; z-index:3; pointer-events:none;}
+               display:flex; align-items:center; justify-content:center; z-index:3;}
   .tile .corner{position:absolute; right:0; bottom:0; width:0; height:0;
                 border-style:solid; border-width:0 0 14px 14px;
-                border-color:transparent transparent rgba(0,0,0,.42) transparent; z-index:3; pointer-events:none;}
+                border-color:transparent transparent rgba(0,0,0,.42) transparent; z-index:3;}
 
   .tile-map-link {
     position: absolute; right: 6px; bottom: 5px; font-size: 13px; z-index: 4;
@@ -181,20 +183,17 @@
 
   /* ---- sheets ---- */
   .scrim{position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:20;
-         opacity:0; pointer-events:none; transition:opacity .25s ease;}
+         opacity:0; pointer-events:none; transition:opacity .18s;}
   .scrim.on{opacity:1; pointer-events:auto;}
   .sheet{
     position:fixed; left:0; right:0; bottom:0; z-index:21;
     background:var(--sheet); border-radius:16px 16px 0 0;
     border-top:1px solid var(--line);
     padding:6px 16px calc(16px + env(safe-area-inset-bottom,0px));
-    transform:translateY(101%); 
-    transition:transform .28s cubic-bezier(0.32, 0.72, 0, 1);
-    max-height:88vh; overflow-y:auto; will-change: transform;
+    transform:translateY(101%); transition:transform .22s cubic-bezier(.32,.72,0,1);
+    max-height:88vh; overflow-y:auto;
   }
   .sheet.on{transform:translateY(0);}
-  .sheet.dragging { transition: none !important; }
-
   .grip{width:36px; height:4px; border-radius:2px; background:var(--grid-major);
         margin:6px auto 12px; cursor:grab;}
   .sheet h2{margin:0 0 14px; font-size:16px; font-weight:700;}
@@ -256,14 +255,11 @@
     background:var(--sheet); border-right:1px solid var(--line);
     box-shadow:6px 0 24px rgba(0,0,0,.45);
     transform:translateX(-101%);
-    transition:transform .28s cubic-bezier(0.32, 0.72, 0, 1);
+    transition:transform .24s cubic-bezier(.32,.72,0,1);
     display:flex; flex-direction:column;
     padding-top:env(safe-area-inset-top,0px);
-    will-change: transform;
   }
   .drawer.on{transform:translateX(0);}
-  .drawer.dragging { transition: none !important; }
-
   .drawer-head{
     display:flex; align-items:flex-start; gap:10px; flex:none;
     padding:16px 14px 12px; border-bottom:1px solid var(--line);
@@ -466,9 +462,10 @@
     <label for="fNotes">Notes</label>
     <textarea id="fNotes" placeholder="Anything worth remembering"></textarea>
   </div>
+  <button class="btn primary" id="btnDone">Close</button>
+  <button class="btn" id="btnOpenInside">Open inside</button>
   <button class="btn" id="btnDuplicate">Duplicate</button>
   <button class="btn danger" id="btnDelete">Delete tile</button>
-  <button class="btn primary" id="btnDone">Close</button>
 </div>
 
 <!-- all tiles in this view -->
@@ -530,6 +527,7 @@ const PALETTE = ['#6ea8fe','#b35d5d','#c68642','#b7a13d','#5fa79f','#5d79c7',
                  '#d96b8a','#e08a4e','#9ecf63','#63b77a','#63bcd6','#9a72d8',
                  '#d06ac9','#f2f2f2','#a7b0bb'];
 
+// Helper to darken hex color for borders
 function darkenColor(hex, percent) {
   let num = parseInt(hex.replace('#',''), 16);
   let r = (num >> 16) * (1 - percent / 100);
@@ -721,31 +719,10 @@ function checkTaskAlerts() {
     if (ev.start_min === current && !notifiedEvents.has(key)) {
       notifiedEvents.add(key);
       try {
-        const notif = new Notification(fmt(ev.start_min), {
-          body: `${ev.title} is starting. Tap here or window to complete!`,
+        new Notification(fmt(ev.start_min), {
+          body: `${ev.title} is starting now (${fmtDur(ev.end_min - ev.start_min)})`,
           tag: key
         });
-        
-        setTimeout(() => {
-          if (confirm(`Did you complete "${ev.title}"?`)) {
-            ev.counter = (ev.counter || 0) + 1;
-            save();
-            render();
-            toast(`Completed! Counter increased to ${ev.counter}`);
-          }
-        }, 1000);
-
-        notif.onclick = () => {
-          window.focus();
-          const completed = confirm(`Did you complete "${ev.title}"?`);
-          if (completed) {
-            ev.counter = (ev.counter || 0) + 1;
-            save();
-            render();
-            toast(`Completed! Counter increased to ${ev.counter}`);
-          }
-          notif.close();
-        };
       } catch (e) {}
       vibrate(40);
     }
@@ -1021,6 +998,7 @@ function drawTiles(){
     titleWrap.appendChild(t);
     sticky.appendChild(titleWrap);
 
+    // Check for overflow marquee effect after DOM injection
     requestAnimationFrame(() => {
       const overflowDist = t.scrollWidth - titleWrap.clientWidth;
       if (overflowDist > 4) {
@@ -1038,12 +1016,7 @@ function drawTiles(){
 
     const dur = document.createElement('div');
     dur.className = 't-dur mono';
-    let durText = `(${fmtDur(ev.end_min - ev.start_min)})`;
-    if (currentMin >= ev.start_min && currentMin < ev.end_min) {
-      const timeLeft = ev.end_min - currentMin;
-      durText += ` · ${fmtDur(timeLeft)} left`;
-    }
-    dur.textContent = durText;
+    dur.textContent = `(${fmtDur(ev.end_min - ev.start_min)})`;
     sticky.appendChild(dur);
     
     el.appendChild(sticky);
@@ -1143,15 +1116,7 @@ function updateTileDOM(i){
   if (timeEl) timeEl.textContent = `${fmt(ev.start_min)} – ${fmt(ev.end_min)}`;
 
   const durEl = el.querySelector('.t-dur');
-  if (durEl) {
-    const currentMin = nowMin();
-    let durText = `(${fmtDur(ev.end_min - ev.start_min)})`;
-    if (currentMin >= ev.start_min && currentMin < ev.end_min) {
-      const timeLeft = ev.end_min - currentMin;
-      durText += ` · ${fmtDur(timeLeft)} left`;
-    }
-    durEl.textContent = durText;
-  }
+  if (durEl) durEl.textContent = `(${fmtDur(ev.end_min - ev.start_min)})`;
 
   const currentMin = nowMin();
   let overlay = el.querySelector('.tile-past-overlay');
@@ -1416,7 +1381,6 @@ let isTouch = false;
 let canvasCreate = null;
 let autoScrollRAF = null;
 let autoScrollSpeed = 0;
-let lastCanvasTap = 0;
 
 function startAutoScroll(speed) {
   autoScrollSpeed = speed;
@@ -1495,14 +1459,6 @@ function onDown(e){
   const clickedMin = clampMin(minOf(clickY));
 
   if (!handle && !tile) {
-    const now = Date.now();
-    const isDoubleTap = (now - lastCanvasTap < 400);
-    lastCanvasTap = now;
-
-    if (!isDoubleTap) {
-      return; 
-    }
-
     const g = laneGeometry();
     const clickedLane = Math.max(0, Math.floor((clickX - g.gutter) / (g.laneW + g.gap)));
     const step = 1;
@@ -1515,20 +1471,25 @@ function onDown(e){
       y0: pt.clientY,
       x0: pt.clientX,
       e0: alignedStart + initDur,
-      active: true,
+      active: false,
       isTouch: e.type === 'touchstart'
     };
 
-    vibrate(20);
-    const startM = canvasCreate.startYMin;
-    const endM = Math.min(dayEnd, canvasCreate.e0);
-    const newTile = makeTile(startM, endM, 'New tile', PALETTE[events.length % PALETTE.length]);
-    newTile.lane_bias = canvasCreate.lane;
-    events.push(newTile);
-    editing = events.length - 1;
-    setSelection(editing);
-    render();
-    updateTileDOM(editing);
+    longPressTimer = setTimeout(() => {
+      if (canvasCreate) {
+        canvasCreate.active = true;
+        vibrate(20);
+        const startM = canvasCreate.startYMin;
+        const endM = Math.min(dayEnd, canvasCreate.e0);
+        const newTile = makeTile(startM, endM, 'New tile', PALETTE[events.length % PALETTE.length]);
+        newTile.lane_bias = canvasCreate.lane;
+        events.push(newTile);
+        editing = events.length - 1;
+        setSelection(editing);
+        render();
+        updateTileDOM(editing);
+      }
+    }, 400);
     return;
   }
 
@@ -1578,23 +1539,22 @@ function onDown(e){
       }
     }, 200);
   } else {
-    // Quick hold or immediate drag activation
     longPressTimer = setTimeout(() => {
       if (drag && !drag.active) {
         drag.active = true;
         if (drag.el) drag.el.classList.add('drag');
         vibrate(15);
       }
-    }, 180);
+    }, 220);
 
     tileEditTimer = setTimeout(() => {
-      if (drag && !drag.moved && !drag.active) {
+      if (drag && !drag.moved) {
         vibrate(25);
         if (drag.el) drag.el.classList.remove('drag');
         drag = null;
         openTile(i);
       }
-    }, 550);
+    }, 600);
   }
 }
 
@@ -1606,7 +1566,13 @@ function onMove(e){
     const dx = pt.clientX - canvasCreate.x0;
     canvasCreate.lastClientY = pt.clientY;
 
-    if (!canvasCreate.active) return;
+    if (!canvasCreate.active) {
+      if (Math.hypot(dx, dy) > 10) {
+        clearTimeout(longPressTimer);
+        canvasCreate = null;
+      }
+      return;
+    }
     if (e.cancelable) e.preventDefault();
     
     checkAutoScrollEdge(pt.clientY);
@@ -1621,31 +1587,29 @@ function onMove(e){
   const dy = pt.clientY - drag.y0;
   const dx = pt.clientX - drag.x0;
 
-  if (Math.hypot(dx, dy) > 5) {
+  if (Math.hypot(dx, dy) > 6) {
     clearTimeout(tileEditTimer);
   }
 
-  if (drag.pendingActive && Math.hypot(dx, dy) > 6) {
+  if (drag.pendingActive && Math.hypot(dx, dy) > 8) {
     drag.pendingActive = false;
-    drag.active = true;
-    if (drag.el) drag.el.classList.add('drag');
+    drag = null;
+    return;
   }
 
   if (!drag.active) {
-    if (Math.hypot(dx, dy) > 8) {
+    if (Math.hypot(dx, dy) > 10) {
       clearTimeout(longPressTimer);
       clearTimeout(tileEditTimer);
-      drag.active = true;
-      if (drag.el) drag.el.classList.add('drag');
-    } else {
-      return;
+      drag = null; 
     }
+    return;
   }
 
   if (e.cancelable) e.preventDefault();
 
   if (!drag.moved){
-    if (Math.abs(dy) < 2 && Math.abs(dx) < 2 && drag.mode !== 'move') return;
+    if (Math.abs(dy) < 3 && Math.abs(dx) < 3 && drag.mode !== 'move') return;
     drag.moved = true;
     clearTimeout(tileEditTimer);
   }
@@ -1688,6 +1652,7 @@ function onUp(e){
   stopAutoScroll();
 
   if (canvasCreate){
+    clearTimeout(longPressTimer);
     const wasActive = canvasCreate.active;
     canvasCreate = null;
     hideBubble();
@@ -1744,59 +1709,37 @@ scrollEl.addEventListener('click', e => {
 /* ============================================================
    Swipe Gestures: Edge Swipe & Slide Down to Close
    ============================================================ */
-let gesture = null;
-
+let globalTouch = null;
 window.addEventListener('touchstart', e => {
   if (e.touches.length !== 1) return;
   const t = e.touches[0];
-  const activeSheet = document.querySelector('.sheet.on, .drawer.on');
-
-  if (!activeSheet && t.clientX <= 40) {
-    gesture = { type: 'drawer', startX: t.clientX, startY: t.clientY, el: sheetList };
-    sheetList.classList.add('dragging');
-    openList();
-  } else if (activeSheet) {
-    if (activeSheet.scrollTop <= 0) {
-      gesture = { type: 'sheet', startX: t.clientX, startY: t.clientY, el: activeSheet };
-      activeSheet.classList.add('dragging');
-    }
-  }
+  globalTouch = { x: t.clientX, y: t.clientY, time: Date.now() };
 }, { passive: true });
 
 window.addEventListener('touchmove', e => {
-  if (!gesture || e.touches.length !== 1) return;
+  if (!globalTouch || e.touches.length !== 1) return;
   const t = e.touches[0];
-  const dx = t.clientX - gesture.startX;
-  const dy = t.clientY - gesture.startY;
+  const dx = t.clientX - globalTouch.x;
+  const dy = t.clientY - globalTouch.y;
 
-  if (gesture.type === 'drawer') {
-    const translate = Math.max(-340, Math.min(0, dx - 340));
-    gesture.el.style.transform = `translateX(${translate}px)`;
-  } else if (gesture.type === 'sheet') {
-    const translate = Math.max(0, dy);
-    gesture.el.style.transform = `translateY(${translate}px)`;
+  const anyOpen = document.querySelector('.sheet.on, .drawer.on');
+  if (!anyOpen && globalTouch.x <= 40 && dx > 50 && Math.abs(dy) < 40) {
+    globalTouch = null;
+    openList();
   }
 }, { passive: true });
 
 window.addEventListener('touchend', e => {
-  if (!gesture) return;
+  if (!globalTouch) return;
   const t = e.changedTouches[0];
-  const dx = t.clientX - gesture.startX;
-  const dy = t.clientY - gesture.startY;
+  const dy = t.clientY - globalTouch.y;
+  const dx = t.clientX - globalTouch.x;
 
-  gesture.el.classList.remove('dragging');
-  gesture.el.style.transform = '';
-
-  if (gesture.type === 'drawer') {
-    if (dx < -100) {
-      closeSheets();
-    }
-  } else if (gesture.type === 'sheet') {
-    if (dy > 100) {
-      closeSheets();
-    }
+  const activeSheet = document.querySelector('.sheet.on');
+  if (activeSheet && dy > 80 && Math.abs(dx) < 60) {
+    closeSheets();
   }
-  gesture = null;
+  globalTouch = null;
 }, { passive: true });
 
 /* ============================================================
@@ -1811,10 +1754,7 @@ const sheetSettings = document.getElementById('sheetSettings');
 function openSheet(el){ scrim.classList.add('on'); el.classList.add('on'); }
 function closeSheets(){
   scrim.classList.remove('on');
-  [sheetTile, sheetTpl, sheetList, sheetAuth, sheetSettings].forEach(s => {
-    s.classList.remove('on');
-    s.style.transform = '';
-  });
+  [sheetTile, sheetTpl, sheetList, sheetAuth, sheetSettings].forEach(s => s.classList.remove('on'));
   if (editing !== -1){ commitEdits(); editing = -1; }
 }
 scrim.addEventListener('click', closeSheets);
@@ -1859,6 +1799,7 @@ function openTile(i){
   document.getElementById('fNotes').value = noteText(ev.notes);
   refreshSteppers();
   buildSwatches(ev.color);
+  document.getElementById('btnOpenInside').textContent = 'Open inside';
   openSheet(sheetTile);
 }
 
@@ -1882,15 +1823,6 @@ document.getElementById('fLocation').addEventListener('input', e => {
 document.getElementById('btnTestLocation').addEventListener('click', () => {
   const val = document.getElementById('fLocation').value.trim();
   if (val) window.open(getMapsUrl(val), '_blank');
-});
-
-// Auto confirm and exit menu when pressing Enter on the title input
-document.getElementById('fTitle').addEventListener('keydown', e => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    commitEdits();
-    closeSheets();
-  }
 });
 
 function refreshSteppers(){
@@ -1987,6 +1919,15 @@ document.querySelectorAll('[data-step]').forEach(btn => {
 
 document.getElementById('btnDone').addEventListener('click', closeSheets);
 
+document.getElementById('btnOpenInside').addEventListener('click', () => {
+  if (editing === -1) return;
+  const i = editing;
+  commitEdits();
+  editing = -1;
+  closeSheets();
+  openChild(i);
+});
+
 document.getElementById('btnDelete').addEventListener('click', () => {
   if (editing === -1) return;
   events.splice(editing, 1);
@@ -2001,7 +1942,7 @@ document.getElementById('btnDuplicate').addEventListener('click', () => {
   const copy = normalise(JSON.parse(JSON.stringify(src)));
   copy.lane_bias = firstFreeLane(copy.start_min, copy.end_min, -1);
   if (laneBlocked(copy.start_min, copy.end_min, copy.lane_bias, -1)){
-    copy.start_min = Math.min(dayEnd - dur, copy.start_min);
+    copy.start_min = Math.min(dayEnd - dur, copy.end_min);
     copy.end_min = copy.start_min + dur;
   }
   events.push(copy);
@@ -2023,7 +1964,7 @@ function buildTileList(){
   document.getElementById('listSub').textContent = new Date().toLocaleDateString(undefined,{weekday:'long', month:'long', day:'numeric'});
   box.innerHTML = '';
   if (!events.length){
-    box.innerHTML = '<div class="empty">No tiles here yet.<br>Double tap empty space to make one.</div>';
+    box.innerHTML = '<div class="empty">No tiles here yet.<br>Long press empty space to make one.</div>';
     return;
   }
   events.map((ev,i) => ({ev,i}))
@@ -2078,6 +2019,14 @@ function buildTileList(){
     counterWrap.appendChild(lbl);
     counterWrap.appendChild(btnUp);
 
+    const open = document.createElement('button');
+    open.className = 'trowbtn'; open.textContent = '›';
+    open.setAttribute('aria-label', 'Open inside ' + ev.title);
+    open.addEventListener('click', e => {
+      e.stopPropagation();
+      closeSheets(); openChild(i);
+    });
+
     const del = document.createElement('button');
     del.className = 'trowbtn danger'; del.textContent = '✕';
     del.setAttribute('aria-label', 'Delete ' + ev.title);
@@ -2097,6 +2046,7 @@ function buildTileList(){
     row.appendChild(dot); 
     row.appendChild(mid);
     row.appendChild(counterWrap);
+    row.appendChild(open); 
     row.appendChild(del);
     row.addEventListener('click', () => { closeSheets(); openTile(i); });
     box.appendChild(row);
@@ -2104,6 +2054,21 @@ function buildTileList(){
 }
 document.getElementById('btnList').addEventListener('click', openList);
 document.getElementById('btnCloseList').addEventListener('click', closeSheets);
+
+(() => {
+  let sx = null, sy = null;
+  sheetList.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) return;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+  }, {passive:true});
+  sheetList.addEventListener('touchend', e => {
+    if (sx === null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - sx, dy = t.clientY - sy;
+    if (dx < -55 && Math.abs(dy) < 45) closeSheets();
+    sx = sy = null;
+  }, {passive:true});
+})();
 
 /* ============================================================
    Templates
