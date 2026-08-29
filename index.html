@@ -324,6 +324,13 @@
          opacity:0; pointer-events:none; transition:all .2s; max-width:86vw;}
   #toast.on{opacity:1; transform:translateX(-50%) translateY(0);}
 
+  #gdbg{position:fixed; left:6px; top:60px; z-index:39; display:none;
+        background:rgba(15,17,22,.92); border:1px solid var(--grid-major);
+        border-radius:7px; padding:6px 8px; max-width:70vw;
+        font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10.5px;
+        line-height:1.5; color:#9ecf63; white-space:pre-wrap; pointer-events:none;}
+  #gdbg.on{display:block;}
+
   @media (prefers-reduced-motion:reduce){*{transition:none !important;}}
 </style>
 </head>
@@ -361,6 +368,8 @@
 <div class="sheet" id="sheetSettings">
   <div class="grip"></div>
   <h2>Settings</h2>
+  <p class="hint" id="buildTag">build —</p>
+  <button class="btn" id="btnGestureDebug">Gesture debug: off</button>
   <button class="btn" id="btnEnableNotifications">Enable start notifications</button>
   <button class="btn" id="btnOpenAuth">Cloud sync</button>
   <button class="btn" id="btnOpenTemplates">Templates</button>
@@ -509,6 +518,7 @@
 </div>
 
 <div id="toast"></div>
+<div id="gdbg"></div>
 
 <script>
 "use strict";
@@ -526,6 +536,18 @@ const MIN_DUR = 1;
 const TICK_GAP = 40;                  
 const ZOOM_MAX = 48;
 const LS_KEY = 'chronoscale.v1';
+const BUILD = 'g3-hold';
+
+/* ---- gesture debug readout ---- */
+let GDBG = false;
+const gdbgLines = [];
+function gdbg(msg){
+  if (!GDBG) return;
+  gdbgLines.push(msg);
+  while (gdbgLines.length > 7) gdbgLines.shift();
+  const el = document.getElementById('gdbg');
+  if (el) el.textContent = gdbgLines.join('\n');
+}
 
 const PALETTE = ['#6ea8fe','#b35d5d','#c68642','#b7a13d','#5fa79f','#5d79c7',
                  '#d96b8a','#e08a4e','#9ecf63','#63b77a','#63bcd6','#9a72d8',
@@ -711,6 +733,15 @@ function updateNotificationBtn() {
 }
 
 document.getElementById('btnEnableNotifications').addEventListener('click', requestNotificationPermission);
+
+document.getElementById('buildTag').textContent = 'build ' + BUILD;
+document.getElementById('btnGestureDebug').addEventListener('click', () => {
+  GDBG = !GDBG;
+  document.getElementById('gdbg').classList.toggle('on', GDBG);
+  document.getElementById('btnGestureDebug').textContent = 'Gesture debug: ' + (GDBG ? 'on' : 'off');
+  gdbgLines.length = 0;
+  gdbg('debug on · build ' + BUILD);
+});
 
 function checkTaskAlerts() {
   if (!("Notification" in window) || Notification.permission !== "granted") return;
@@ -1236,6 +1267,7 @@ scrollEl.addEventListener('scroll', () => {
      that hasn't armed yet. Active drags scroll themselves at the edges. */
   if (typeof drag !== 'undefined' && drag && !drag.active){
     clearTimeout(longPressTimer); unarmHandles(); drag = null;
+    gdbg('  list scrolled -> press dropped');
   }
   if (typeof canvasCreate !== 'undefined' && canvasCreate && !canvasCreate.active){
     clearTimeout(longPressTimer); canvasCreate = null;
@@ -1528,6 +1560,7 @@ function onDown(e){
       setSelection(i); 
     }
   }
+  gdbg((handle ? 'press handle ' : 'press tile ') + i + ' (' + e.type + ')');
 
   drag = {
     i, mode: handle ? handle.dataset.handle : 'move',
@@ -1548,24 +1581,28 @@ function onDown(e){
     drag.pendingActive = true;
     drag.active = false;
     longPressTimer = setTimeout(() => {
-      if (drag && drag.pendingActive &&
-          drag.maxMove <= 8 && scrollEl.scrollTop === drag.scroll0) {
-        drag.active = true;
-        drag.pendingActive = false;
-        if (drag.el) drag.el.classList.add('drag');
-        if (drag.handleEl) drag.handleEl.classList.add('armed');
-        vibrate(18);
-      }
+      if (!drag || !drag.pendingActive) return gdbg('  resize: press already dropped');
+      if (drag.maxMove > 8) return gdbg('  resize: not armed, moved ' + Math.round(drag.maxMove) + 'px');
+      if (Math.abs(scrollEl.scrollTop - drag.scroll0) > 2) return gdbg('  resize: not armed, list scrolled');
+      drag.active = true;
+      drag.pendingActive = false;
+      if (drag.el) drag.el.classList.add('drag');
+      if (drag.handleEl) drag.handleEl.classList.add('armed');
+      vibrate(18);
+      gdbg('  ARMED resize');
     }, 350);
   } else {
     /* Long press, finger held still, list not scrolling → arm the drag.
        Any movement or scroll before that leaves the gesture to the browser. */
     longPressTimer = setTimeout(() => {
-      if (drag && !drag.active &&
-          drag.maxMove <= 8 && scrollEl.scrollTop === drag.scroll0) {
+      if (!drag || drag.active) return gdbg('  move: press already dropped');
+      if (drag.maxMove > 8) return gdbg('  move: not armed, moved ' + Math.round(drag.maxMove) + 'px');
+      if (Math.abs(scrollEl.scrollTop - drag.scroll0) > 2) return gdbg('  move: not armed, list scrolled');
+      {
         drag.active = true;
         if (drag.el) drag.el.classList.add('drag');
         vibrate(18);
+        gdbg('  ARMED move');
       }
     }, 350);
   }
@@ -1616,6 +1653,7 @@ function onMove(e){
     if (dist > 8) {
       clearTimeout(longPressTimer);
       drag = null;
+      gdbg('  moved ' + Math.round(dist) + 'px -> released to scroll');
     }
     return;
   }
@@ -1623,6 +1661,7 @@ function onMove(e){
   /* Armed, but the browser already committed this gesture to scrolling
      (preventDefault would be ignored) — let it scroll instead of yanking the tile. */
   if (drag.isTouch && !drag.moved && e.cancelable === false) {
+    gdbg('  browser already scrolling -> drag dropped');
     clearTimeout(longPressTimer);
     if (drag.el) drag.el.classList.remove('drag');
     unarmHandles();
@@ -1698,6 +1737,7 @@ function onUp(e){
   drag = null;
   hideBubble();
 
+  gdbg('release: armed=' + active + ' moved=' + moved);
   if (!active) {
     setSelection(i);            // short tap
   } else if (moved) {
