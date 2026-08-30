@@ -63,13 +63,28 @@
   
   /* ---- minimap preview bar ---- */
   #minimap{
-    position:absolute; right:12px; bottom:12px; width:44px; height:180px;
+    position:absolute; right:12px; bottom:12px; width:58px; height:180px;
     background:rgba(29, 32, 39, 0.85); border:1px solid var(--line);
     border-radius:8px; z-index:15; overflow:hidden;
     backdrop-filter:blur(6px); box-shadow:0 4px 16px rgba(0,0,0,0.5);
     touch-action:none; display:flex; flex-direction:column;
   }
-  #minimap-track{position:relative; width:100%; height:100%; flex:1;}
+  /* Hour scale down the left edge so you can read roughly when each block is. */
+  #minimap-hours{
+    position:absolute; left:0; top:0; bottom:0; width:16px;
+    border-right:1px solid var(--line); pointer-events:none; z-index:2;
+  }
+  .mm-hour{
+    position:absolute; left:0; width:16px; text-align:center;
+    font-size:7px; font-weight:700; line-height:1;
+    color:var(--dim); transform:translateY(-50%);
+    font-family:ui-monospace,Menlo,Consolas,monospace;
+  }
+  .mm-tick{
+    position:absolute; left:16px; right:0; height:0;
+    border-top:1px solid var(--grid-minor); opacity:.5; pointer-events:none; z-index:1;
+  }
+  #minimap-track{position:relative; margin-left:16px; width:calc(100% - 16px); height:100%; flex:1;}
   .minimap-tile{position:absolute; border-radius:1px; opacity:0.65;}
   #minimap-viewport{
     position:absolute; left:0; right:0; border:1px solid var(--accent);
@@ -117,13 +132,24 @@
   .tile.drag{z-index:8; transform: scale(1.02); touch-action:none;}
   .tile.drag .tile-bg { box-shadow: 0 12px 28px rgba(0,0,0,.65); filter: brightness(1.1); opacity: 0.55; }
   
+  /* ---- tile text -----------------------------------------------------
+     Everything is sized off two custom properties set by JS:
+       --tt  title font-size in px
+       --tu  the vertical space the text is actually allowed to occupy
+     font-size:0 / line-height:0 on the container stops the body's
+     15px/1.4 strut from being inherited — otherwise every line box has a
+     21px floor and shrinking the font changes nothing. Each line then
+     declares an explicit height, so its size is arithmetic, not a guess. */
   .t-sticky {
     position: sticky; top: 0;
-    padding: 5px 8px; max-height: 100%; overflow: hidden;
+    padding: var(--tp, 5px) 8px;
+    max-height: var(--tu, 100%); overflow: hidden;
+    font-size: 0; line-height: 0;
     color: #ffffff; text-shadow: 0 1px 3px rgba(0,0,0,0.8);
     z-index: 2; pointer-events: none;
   }
-  
+  .tile.no-text .t-sticky { display: none; }
+
   @keyframes marquee {
     0% { transform: translateX(0); }
     30% { transform: translateX(0); }
@@ -132,29 +158,35 @@
   }
 
   .t-sticky .t-title-wrap {
-    overflow: hidden; white-space: nowrap; width: 100%; position: relative;
-    /* Kill the inherited 15px/1.4 strut (=21px). Without this the line box
-       never shrinks below 21px however small .t-title's font-size gets. */
-    font-size: 0; line-height: 0;
+    display: block; overflow: hidden; white-space: nowrap;
+    width: 100%; position: relative;
+    height: calc(var(--tt, 13px) * 1.25);
   }
   .t-sticky .t-title {
-    font-weight: 750; font-size: 13px; line-height: 1.25;
-    display: inline-block; white-space: nowrap;
-    /* top-aligned so the line box is exactly font-size * line-height */
-    vertical-align: top;
+    font-weight: 750;
+    font-size: var(--tt, 13px); line-height: 1.25;
+    display: inline-block; vertical-align: top; white-space: nowrap;
   }
   .t-sticky .t-title.overflowing {
     animation: marquee 6s linear infinite;
   }
 
-  .t-sticky .t-time{font-size:10.5px; opacity:.9; margin-top:1px; line-height:1.25;
-                overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-  .t-sticky .t-dur{font-size:10px; opacity:.85; line-height:1.25;
-                overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-  
-  /* Very short tiles give the text almost the whole tile to live in.
-     Keep these paddings in sync with TILE_PAD_V / TILE_PAD_V_TIGHT in JS. */
-  .tile.tight .t-sticky {padding:1px 5px;}
+  /* Sub-lines scale with the title and are hidden unless JS says a whole
+     line fits, so they are never drawn half-way. */
+  .t-sticky .t-time, .t-sticky .t-dur {
+    display: none; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .tile.show-time .t-time {
+    display: block; opacity: .9; margin-top: 1px;
+    font-size: calc(var(--tt, 13px) * .8); line-height: 1.25;
+    height: calc(var(--tt, 13px) * .8 * 1.25);
+  }
+  .tile.show-dur .t-dur {
+    display: block; opacity: .85;
+    font-size: calc(var(--tt, 13px) * .76); line-height: 1.25;
+    height: calc(var(--tt, 13px) * .76 * 1.25);
+  }
   .tile .badge{position:absolute; right:5px; top:5px; background:rgba(0,0,0,.45);
                color:#fff; font-size:10px; font-weight:700; border-radius:999px;
                min-width:17px; height:17px; padding:0 5px;
@@ -176,8 +208,16 @@
     border-radius:50%; background:#e5484d; color:#fff;
     border:1.5px solid rgba(0,0,0,.4);
     display:flex; align-items:center; justify-content:center;
-    font-size:13px; font-weight:800; line-height:1; z-index:9;
+    font-size:13px; font-weight:800; line-height:1; z-index:11;
     pointer-events:auto; box-shadow:0 2px 7px rgba(0,0,0,.55);
+  }
+  /* The visible dot stays 23px, but the tappable area is padded out to the
+     44px Apple recommends. The pseudo-element is not a hit-test target
+     itself, so taps inside it still report .tile-del as e.target. */
+  .tile-del::before{
+    content:''; position:absolute; left:50%; top:50%;
+    width:44px; height:44px; transform:translate(-50%,-50%);
+    border-radius:50%;
   }
   .tile-del:active{ transform:scale(.88); }
 
@@ -187,20 +227,32 @@
   }
   .tile-map-link:active { transform: scale(1.2); opacity: 1; }
   
+  /* The .handle strip only POSITIONS the grip — it catches nothing itself,
+     so dragging near a tile edge moves the tile as usual. Only .t-grip is
+     hit-testable, so a resize has to start on the visible rectangle.
+     --grip-hit is the vertical slop around the 4px bar; set it to 4px to
+     make the hitbox exactly the bar you can see. */
   .handle{
     position:absolute; left:0; right:0; height:42px; z-index:10;
     display:flex; align-items:center; justify-content:center;
-    cursor:ns-resize; touch-action:none;
+    pointer-events:none;
+    --grip-w:38px; --grip-hit:22px;
   }
-  .handle::after{
-    content:''; width:38px; height:4px; border-radius:2px;
+  .t-grip{
+    position:relative; width:var(--grip-w); height:var(--grip-hit);
+    display:flex; align-items:center; justify-content:center;
+    cursor:ns-resize; touch-action:none; pointer-events:auto;
+  }
+  .t-grip::after{
+    content:''; width:100%; height:4px; border-radius:2px;
     background:var(--text); opacity:.95;
     box-shadow:0 0 0 1px rgba(0,0,0,.5), 0 2px 6px rgba(0,0,0,.4);
   }
   .handle.top{top:-21px;} 
   .handle.bot{bottom:-21px;}
-  .handle.armed::after{
-    background:var(--accent); width:54px; height:5px;
+  .handle.armed{ --grip-w:54px; }
+  .handle.armed .t-grip::after{
+    background:var(--accent); height:5px;
     box-shadow:0 0 0 1px rgba(0,0,0,.5), 0 0 10px rgba(110,168,254,.7);
   }
 
@@ -398,6 +450,16 @@
     opacity:0; pointer-events:none; margin:0; z-index:-1;
   }
 
+  /* Direct-tap haptics (iOS 26.5+). A real native switch is laid invisibly
+     over the control so your finger toggles IT, which is the only thing that
+     still reaches the Taptic Engine. Do NOT add appearance:none — stripping
+     the control's native look disables the haptic. opacity:0 is fine. */
+  .haptic-tap{ display:block; position:relative; }
+  .haptic-tap > .haptic-hit{
+    position:absolute; inset:0; width:100%; height:100%;
+    margin:0; padding:0; opacity:0; z-index:5; cursor:pointer;
+  }
+
   @media (prefers-reduced-motion:reduce){*{transition:none !important;}}
 </style>
 </head>
@@ -421,6 +483,7 @@
     </div>
   </div>
   <div id="minimap">
+    <div id="minimap-hours"></div>
     <div id="minimap-track">
       <div id="minimap-viewport"></div>
     </div>
@@ -614,10 +677,14 @@
    Chronoscale mobile
    ============================================================ */
 
-const ROOT_START = 6 * 60, ROOT_END = 22 * 60;
-const ABS_START = 6 * 60, ABS_END = 24 * 60;
+/* The visible day range is a saved preference, not a constant. ABS_* stay
+   wide open so narrowing the range can never clamp (and destroy) tiles that
+   already sit outside it — resetRootView widens the view for those instead. */
+const RANGE_DEFAULT = { start: 6 * 60, end: 22 * 60 };
+let dayRange = { ...RANGE_DEFAULT };
+const ABS_START = 0, ABS_END = 24 * 60;
 const TOP_PAD_PX = 16;
-let dayStart = ROOT_START, dayEnd = ROOT_END;
+let dayStart = dayRange.start, dayEnd = dayRange.end;
 const SNAP = 1;                       
 const MIN_DUR = 1;
 const TICK_GAP = 40;                  
@@ -677,7 +744,11 @@ let pxPerMin = 1.6;
 let selected = -1;
 let editing = -1;
 let lastTap = { time: 0, idx: -1, count: 0 };
-let lastEmptyTap = null;
+/* How long to hold on empty space before a new tile starts under the finger. */
+const CREATE_HOLD_MS = 400;
+/* An empty-space press that may turn out to be a tap (deselect), a scroll
+   flick, or a hold that creates a tile. Resolved in onUp. */
+let pendingEmptyTap = null;
 let tapActionTimer = null;
 let jiggleIdx = -1;          // tile currently shaking with a delete badge
 
@@ -710,7 +781,7 @@ function pathTitles(){ return viewStack.map(s => s.title); }
 
 function resetRootView(){
   viewStack = [];
-  let s = ROOT_START, e = ROOT_END;
+  let s = dayRange.start, e = dayRange.end;
   for (const ev of events){
     s = Math.min(s, Math.floor(ev.start_min / 60) * 60);
     e = Math.max(e, Math.ceil(ev.end_min / 60) * 60);
@@ -843,12 +914,34 @@ document.getElementById('btnEnableNotifications').addEventListener('click', requ
 
 document.getElementById('buildTag').textContent = 'build ' + BUILD;
 document.getElementById('btnTestHaptic').addEventListener('click', () => {
-  Haptics.fire(18, true);
-  setTimeout(() => Haptics.fire(18, true), 160);
-  setTimeout(() => Haptics.fire(30, true), 320);
-  toast(typeof navigator.vibrate === 'function'
-    ? 'Sent three buzzes via the Vibration API'
-    : 'Sent three taps via the iOS switch trick — silent means your iOS blocks it');
+  const path = Haptics.path();
+  const v = Haptics.iosVersion;
+
+  if (path === 'vibrate'){
+    Haptics.fire(18, true);
+    setTimeout(() => Haptics.fire(18, true), 160);
+    setTimeout(() => Haptics.fire(30, true), 320);
+    toast('Three buzzes sent via the Vibration API');
+    return;
+  }
+
+  if (path === 'switch'){
+    Haptics.fire(18, true);
+    setTimeout(() => Haptics.fire(18, true), 160);
+    setTimeout(() => Haptics.fire(30, true), 320);
+    toast('Three taps via the switch trick — silent means System Haptics is off');
+    return;
+  }
+
+  if (path === 'tap-only'){
+    // The tap that opened this handler already landed on the overlay switch,
+    // so if haptics work at all you just felt one tick.
+    const ver = v ? ` (iOS ${v.major}.${v.minor})` : '';
+    toast(`Felt one tick? Buttons work${ver}. Apple blocked scripted haptics in 26.5, so gestures stay silent.`);
+    return;
+  }
+
+  toast('No haptic path on this device — Android needs Vibration API, iPhone needs iOS 17.4+');
 });
 document.getElementById('btnGestureDebug').addEventListener('click', () => {
   GDBG = !GDBG;
@@ -899,7 +992,7 @@ function laneEvents(lane, excludeIdx){
 
 function clampMoveInLane(start0, end0, delta, lane, excludeIdx){
   const dur = end0 - start0;
-  const minStart = Math.max(dayStart, 6 * 60);
+  const minStart = Math.max(dayStart, ABS_START);
   const maxStart = dayEnd - dur;
   let best = Math.max(minStart, Math.min(maxStart, start0 + delta));
 
@@ -921,7 +1014,7 @@ function clampMoveInLane(start0, end0, delta, lane, excludeIdx){
 
 function clampResizeTop(idx, proposed){
   const ev = events[idx], lane = ev.lane_bias|0;
-  const minBound = Math.max(dayStart, 6 * 60);
+  const minBound = Math.max(dayStart, ABS_START);
   let s = Math.max(minBound, Math.min(proposed, ev.end_min - MIN_DUR));
   let blocker = minBound;
   for (const o of laneEvents(lane, idx))
@@ -952,13 +1045,13 @@ function laneCount(){
    Model
    ============================================================ */
 function makeTile(startM, endM, title, color){
-  return { start_min:Math.max(6 * 60, startM), end_min:Math.max(Math.max(6 * 60, startM) + MIN_DUR, endM), title:title||'New tile',
+  return { start_min:Math.max(ABS_START, startM), end_min:Math.max(Math.max(ABS_START, startM) + MIN_DUR, endM), title:title||'New tile',
            color:color||PALETTE[0], recurrence:'none', lane_bias:0,
            notes:null, counter:0, children:[], task_id:null, location:null };
 }
 function normalise(raw){
   if (!raw || typeof raw !== 'object') return null;
-  const s = clampMin(Math.max(6 * 60, Number(raw.start_min) || 6 * 60));
+  const s = clampMin(Math.max(ABS_START, Number(raw.start_min) || dayRange.start));
   let e = clampMin(Number(raw.end_min) || s + 1);
   if (e <= s) e = Math.min(ABS_END, s + MIN_DUR);
   return {
@@ -983,6 +1076,7 @@ function noteText(n){
 /* ---------- persistence ---------- */
 function save(){
   db.templates[db.current] = rootEvents();
+  db.range = { start: dayRange.start, end: dayRange.end };
   touchTemplate(db.current);
   try { Store.set(LS_KEY, JSON.stringify(db)); }
   catch (e) { toast("Couldn't save — storage is full"); }
@@ -1002,6 +1096,16 @@ function load(){
   }
   if (!db.templates || !Object.keys(db.templates).length) db.templates = { Default: [] };
   if (!db.templates[db.current]) db.current = Object.keys(db.templates)[0];
+
+  // Saved time range, if any. Guard against a corrupt or inverted pair.
+  const r = db.range;
+  if (r && Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start){
+    dayRange = { start: Math.max(ABS_START, r.start), end: Math.min(ABS_END, r.end) };
+  } else {
+    dayRange = { ...RANGE_DEFAULT };
+  }
+  dayStart = dayRange.start; dayEnd = dayRange.end;
+
   events = (db.templates[db.current] || []).map(normalise).filter(Boolean);
 }
 
@@ -1099,64 +1203,95 @@ function drawGrid(){
   }
 }
 
-/* --- tile text fitting -------------------------------------------------
-   A line of text occupies exactly font-size * line-height pixels, so we can
-   solve for the biggest font that still fits inside the tile instead of
-   guessing. Anything that cannot fit a whole line is hidden rather than
-   clipped half-way through the glyphs. */
-const TILE_LH          = 1.25;  // line-height on .t-title / .t-time / .t-dur
-const TITLE_MAX_PX     = 13;    // .t-sticky .t-title font-size
-const TITLE_MIN_PX     = 7;     // below this it is unreadable anyway
-const TIME_LINE_PX     = 10.5 * TILE_LH + 1;  // .t-time + its margin-top
-const DUR_LINE_PX      = 10   * TILE_LH;      // .t-dur
-const TILE_PAD_V       = 10;    // .t-sticky padding: 5px top + 5px bottom
-const TILE_PAD_V_TIGHT = 2;     // .tile.tight .t-sticky padding: 1px + 1px
-const TIGHT_BELOW_PX   = TITLE_MAX_PX * TILE_LH + TILE_PAD_V;  // 26.25px: below this, reclaim the padding
+/* ============================================================
+   Tile text layout
+   ------------------------------------------------------------
+   The space a label can use is NOT the tile's height. Tiles have a 16px
+   minimum, so once you zoom out far enough a short task is drawn taller
+   than its real duration and the following tile starts before it ends —
+   and that following tile paints over the bottom of the label. Fitting
+   text to tile height therefore still produces vertically cut text.
 
-function fitTileText(el, h){
-  const titleEl = el.querySelector('.t-title');
-  if (!titleEl) return;
-  const timeEl = el.querySelector('.t-time');
-  const durEl  = el.querySelector('.t-dur');
+   So the budget is: tile height, capped by the distance to the next tile
+   in the same lane. Text is fitted to that budget.
 
-  const tight = h < TIGHT_BELOW_PX;
-  el.classList.toggle('tight', tight);
-  let avail = h - (tight ? TILE_PAD_V_TIGHT : TILE_PAD_V);
+   Every line occupies exactly font-size * line-height and the CSS sets
+   those heights explicitly, so the largest font that fits is a division,
+   not a guess or a measure-and-retry loop. A line that cannot be drawn
+   whole is not drawn at all; if even the smallest readable title cannot
+   fit, the label is dropped rather than smeared.
+   ============================================================ */
+const MIN_TILE_H = 16;      // tiles never render shorter than this
+const TT_MAX     = 13;      // preferred title size, px
+const TT_MIN     = 7;       // below this, drop the label entirely
+const TT_LH      = 1.25;    // must match .t-title line-height
+const TT_PAD     = 5;       // .t-sticky vertical padding when there is room
+const TT_TIME_R  = 0.8;     // .t-time size, as a fraction of the title
+const TT_DUR_R   = 0.76;    // .t-dur  size, as a fraction of the title
+const TT_SUB_LH  = 1.25;    // must match sub-line line-height
 
-  // Title keeps its normal size while there is room, then shrinks to fit.
-  const size = Math.max(TITLE_MIN_PX, Math.min(TITLE_MAX_PX, avail / TILE_LH));
-  titleEl.style.fontSize = size.toFixed(2) + 'px';
-  avail -= size * TILE_LH;
-
-  // Time and duration only appear if a full line of each still fits.
-  const showTime = !!timeEl && avail >= TIME_LINE_PX;
-  if (timeEl) timeEl.style.display = showTime ? '' : 'none';
-  if (showTime) avail -= TIME_LINE_PX;
-
-  const showDur = !!durEl && showTime && avail >= DUR_LINE_PX;
-  if (durEl) durEl.style.display = showDur ? '' : 'none';
-
-  el.classList.toggle('short', !showTime);
+function tileHeight(ev){
+  return Math.max(MIN_TILE_H, (ev.end_min - ev.start_min) * pxPerMin);
 }
 
-function verifyTileFit(el, h){
-  // The formula above is exact for plain text, but emoji and fallback fonts can
-  // render a line taller than font-size * line-height. Measure what actually
-  // landed and re-fit against a reduced budget if anything still spills out.
-  const sticky = el.querySelector('.t-sticky');
-  if (!sticky) return;
-  let budget = h, guard = 0;
-  while (sticky.scrollHeight > h + 0.5 && guard++ < 5){
-    budget -= Math.max(1, sticky.scrollHeight - h);
-    if (budget <= 2) break;
-    fitTileText(el, budget);
+/* Visible vertical space for tile i: its own height, cut short by the
+   nearest tile below it in the same lane. */
+function textBudget(i){
+  const ev = events[i];
+  const lane = ev.lane_bias | 0;
+  const top = yOf(ev.start_min);
+  let budget = tileHeight(ev);
+  for (let j = 0; j < events.length; j++){
+    if (j === i) continue;
+    const other = events[j];
+    if ((other.lane_bias | 0) !== lane) continue;
+    const gap = yOf(other.start_min) - top;
+    if (gap > 0 && gap < budget) budget = gap;
+  }
+  return budget;
+}
+
+function layoutTileText(el, budget){
+  // Padding is a luxury: it only appears once a full-size title already fits.
+  const pad = Math.max(0, Math.min(TT_PAD, (budget - TT_MAX * TT_LH) / 2));
+  let room = budget - 2 * pad;
+
+  const tt = Math.min(TT_MAX, room / TT_LH);
+  if (tt < TT_MIN){                 // nothing readable fits — show no text
+    el.classList.add('no-text');
+    el.classList.remove('show-time', 'show-dur');
+    return;
+  }
+  el.classList.remove('no-text');
+  el.style.setProperty('--tt', tt.toFixed(2) + 'px');
+  el.style.setProperty('--tp', pad.toFixed(2) + 'px');
+  el.style.setProperty('--tu', budget.toFixed(2) + 'px');
+
+  room -= tt * TT_LH;
+  const timeH = tt * TT_TIME_R * TT_SUB_LH + 1;   // + margin-top
+  const durH  = tt * TT_DUR_R  * TT_SUB_LH;
+  const showTime = room >= timeH;
+  const showDur  = showTime && (room - timeH) >= durH;
+  el.classList.toggle('show-time', showTime);
+  el.classList.toggle('show-dur',  showDur);
+}
+
+/* Horizontal overflow is the one thing that has to be measured, because it
+   depends on the glyphs. Long titles scroll instead of being truncated. */
+/* Moving or resizing one tile changes how much of its neighbours remains
+   visible, so their budgets have to be recomputed too. This only writes CSS
+   variables — no layout is read, so it is safe to call every drag frame. */
+function refreshAllTileText(){
+  for (let j = 0; j < events.length; j++){
+    const node = canvas.querySelector(`.tile[data-i="${j}"]`);
+    if (node) layoutTileText(node, textBudget(j));
   }
 }
 
 function markTitleOverflow(titleEl, titleWrap){
-  const overflowDist = titleEl.scrollWidth - titleWrap.clientWidth;
-  if (overflowDist > 4) {
-    titleEl.style.setProperty('--scroll-dist', `-${overflowDist + 12}px`);
+  const dist = titleEl.scrollWidth - titleWrap.clientWidth;
+  if (dist > 4){
+    titleEl.style.setProperty('--scroll-dist', `-${dist + 12}px`);
     titleEl.classList.add('overflowing');
   } else {
     titleEl.classList.remove('overflowing');
@@ -1172,7 +1307,7 @@ function drawTiles(){
   events.forEach((ev, i) => {
     const lane = ev.lane_bias|0;
     const isPast = ev.end_min <= currentMin;
-    const top = yOf(ev.start_min), h = Math.max(16, (ev.end_min - ev.start_min) * pxPerMin);
+    const top = yOf(ev.start_min), h = tileHeight(ev);
     const el = document.createElement('div');
     
     el.className = 'tile' + (i === selected ? ' sel' : '')
@@ -1226,11 +1361,8 @@ function drawTiles(){
     el.appendChild(sticky);
 
     // Size the text to the tile, then measure marquee overflow once laid out.
-    fitTileText(el, h);
-    requestAnimationFrame(() => {
-      verifyTileFit(el, h);
-      markTitleOverflow(t, titleWrap);
-    });
+    layoutTileText(el, textBudget(i));
+    requestAnimationFrame(() => markTitleOverflow(t, titleWrap));
 
     if (ev.location) {
       const mapBtn = document.createElement('a');
@@ -1281,7 +1413,7 @@ function rebuildHandles() {
   const { gutter, laneW, gap } = laneGeometry();
   const lane = ev.lane_bias | 0;
   const top = yOf(ev.start_min);
-  const h = Math.max(16, (ev.end_min - ev.start_min) * pxPerMin);
+  const h = tileHeight(ev);
   const left = gutter + lane * (laneW + gap);
 
   ['top','bot'].forEach(side => {
@@ -1292,6 +1424,16 @@ function rebuildHandles() {
     hd.style.left  = left + 'px';
     hd.style.width = laneW + 'px';
     hd.style.top   = (side === 'top' ? top - 21 : top + h - 21) + 'px';
+    /* On a short tile two 22px grips would cover the entire body, leaving
+       nowhere to tap or drag it. Give them a share of the height instead so
+       a usable band always survives in the middle. */
+    if (h < 52) hd.style.setProperty('--grip-hit', Math.max(9, h / 3).toFixed(1) + 'px');
+    // The grip is a real element, not a pseudo-element, so it is what the
+    // pointer actually hits. closest('.handle') still resolves from it, so
+    // every resize code path below is untouched.
+    const grip = document.createElement('div');
+    grip.className = 't-grip';
+    hd.appendChild(grip);
     canvas.appendChild(hd);
   });
 }
@@ -1311,7 +1453,7 @@ function updateTileDOM(i){
   const { gutter, laneW, gap } = laneGeometry();
   const lane = ev.lane_bias | 0;
   const top = yOf(ev.start_min);
-  const h = Math.max(16, (ev.end_min - ev.start_min) * pxPerMin);
+  const h = tileHeight(ev);
   const left = gutter + lane * (laneW + gap);
 
   el.style.top = top + 'px';
@@ -1328,8 +1470,8 @@ function updateTileDOM(i){
   const durEl = el.querySelector('.t-dur');
   if (durEl) durEl.textContent = `(${fmtDur(ev.end_min - ev.start_min)})`;
 
-  fitTileText(el, h);
-  verifyTileFit(el, h);
+  layoutTileText(el, textBudget(i));
+  refreshAllTileText();
   if (titleEl && titleWrap) markTitleOverflow(titleEl, titleWrap);
 
   const currentMin = nowMin();
@@ -1360,7 +1502,50 @@ function updateTileDOM(i){
     hd.style.width = laneW + 'px';
     const side = hd.dataset.handle;
     hd.style.top = (side === 'top' ? top - 21 : top + h - 21) + 'px';
+    if (h < 52) hd.style.setProperty('--grip-hit', Math.max(9, h / 3).toFixed(1) + 'px');
+    else hd.style.removeProperty('--grip-hit');
   });
+}
+
+/* The minimap's hour scale. Rebuilt only when the day range or the widget
+   size actually changes — updateMinimap runs on every scroll frame. */
+let mmHoursKey = '';
+function updateMinimapHours(height){
+  const hours = document.getElementById('minimap-hours');
+  const track = document.getElementById('minimap-track');
+  if (!hours || !track) return;
+
+  const key = `${dayStart}|${dayEnd}|${Math.round(height)}`;
+  if (key === mmHoursKey) return;
+  mmHoursKey = key;
+
+  hours.innerHTML = '';
+  track.querySelectorAll('.mm-tick').forEach(n => n.remove());
+
+  const span = dayEnd - dayStart;
+  if (span <= 0 || height <= 0) return;
+
+  // Widen the gap between labels until they stop colliding at 7px type.
+  const pxPerHour = height / (span / 60);
+  const stepHours = [1, 2, 3, 4, 6, 8].find(s => s * pxPerHour >= 17) || 12;
+
+  const firstHour = Math.ceil(dayStart / 60 / stepHours) * stepHours;
+  for (let h = firstHour; h * 60 <= dayEnd; h += stepHours){
+    const y = ((h * 60 - dayStart) / span) * height;
+    if (y < 5 || y > height - 3) continue;      // don't clip against the frame
+
+    const lab = document.createElement('div');
+    lab.className = 'mm-hour';
+    lab.style.top = y + 'px';
+    const hh = h % 24;
+    lab.textContent = (hh % 12 === 0 ? 12 : hh % 12) + (hh < 12 ? 'a' : 'p');
+    hours.appendChild(lab);
+
+    const tick = document.createElement('div');
+    tick.className = 'mm-tick';
+    tick.style.top = y + 'px';
+    track.appendChild(tick);
+  }
 }
 
 function updateMinimap(){
@@ -1374,6 +1559,8 @@ function updateMinimap(){
   const totalSpan = dayEnd - dayStart;
   const minimapHeight = minimapEl.clientHeight;
   const nLanes = laneCount();
+
+  updateMinimapHours(minimapHeight);
 
   events.forEach(ev => {
     const topRatio = Math.max(0, (ev.start_min - dayStart) / totalSpan);
@@ -1491,6 +1678,8 @@ scrollEl.addEventListener('scroll', () => {
   if (typeof canvasCreate !== 'undefined' && canvasCreate && !canvasCreate.active){
     clearTimeout(longPressTimer); canvasCreate = null;
   }
+  /* Scrolling proves the press was not a tap — forget it either way. */
+  pendingEmptyTap = null;
   if (scrollRAF) return;
   scrollRAF = requestAnimationFrame(() => {
     drawGrid();
@@ -1751,6 +1940,7 @@ function startAutoScroll(speed) {
       if (canvasCreate && canvasCreate.active && canvasCreate.lastClientY !== undefined) {
         updateCreationFromPoint(canvasCreate.lastClientY);
       }
+      applyDrag();
       autoScrollRAF = requestAnimationFrame(step);
     } else {
       autoScrollRAF = null;
@@ -1832,16 +2022,15 @@ function onDown(e){
     const g = laneGeometry();
     const clickedLane = Math.max(0, Math.floor((clickX - g.gutter) / (g.laneW + g.gap)));
     const step = 1;
-    const alignedStart = Math.max(6 * 60, snap(clickedMin, step));
+    const alignedStart = Math.max(dayStart, snap(clickedMin, step));
     const initDur = 1;
 
     if (jiggleIdx !== -1) setJiggle(-1);   // tap off the tile to stop shaking
 
     const now = Date.now();
-    const isSecondTap = lastEmptyTap &&
-      now - lastEmptyTap.time < 450 &&
-      Math.hypot(pt.clientX - lastEmptyTap.x, pt.clientY - lastEmptyTap.y) < 44;
-    lastEmptyTap = { time: now, x: pt.clientX, y: pt.clientY };
+    /* Track the press so onUp can tell a tap (deselect) from a flick. */
+    pendingEmptyTap = { time: now, x: pt.clientX, y: pt.clientY,
+                        scroll0: scrollEl.scrollTop, maxMove: 0 };
 
     canvasCreate = {
       startYMin: alignedStart,
@@ -1855,10 +2044,16 @@ function onDown(e){
       isTouch: e.type === 'touchstart'
     };
 
-    /* Second tap on empty space starts the tile straight away, so you can
-       keep the finger down and drag out its length. */
-    if (isSecondTap){
-      lastEmptyTap = null;
+    /* Hold on empty space to start a tile, then keep the finger down and drag
+       to set its length. Any movement or scroll before the hold completes
+       cancels it, so this never fights with scrolling. */
+    longPressTimer = setTimeout(() => {
+      if (!canvasCreate || canvasCreate.active) return;
+      if (canvasCreate.maxMove > 8) return gdbg('  create: not armed, moved');
+      if (Math.abs(scrollEl.scrollTop - canvasCreate.scroll0) > 2)
+        return gdbg('  create: not armed, list scrolled');
+
+      pendingEmptyTap = null;        // this press is a create, not a tap
       canvasCreate.active = true;
       vibrate(22);
       const startM = canvasCreate.startYMin;
@@ -1872,15 +2067,19 @@ function onDown(e){
       setSelection(editing);
       render();
       updateTileDOM(editing);
-      gdbg('double tap -> new tile');
-    }
+      gdbg('long press -> new tile');
+    }, CREATE_HOLD_MS);
     return;
   }
 
   const i = parseInt((handle || tile).dataset.i, 10);
   const ev = events[i];
 
-  if (!handle) {
+  /* Tap counting runs for grip presses too. On a short tile the grips cover
+     the whole body, so gating this on !handle meant a double tap there could
+     never reach the editor — it only ever looked like a resize attempt.
+     A resize needs a 350ms hold, so a quick second tap is never ambiguous. */
+  {
     const now = Date.now();
     if (jiggleIdx !== -1 && jiggleIdx !== i) setJiggle(-1);
     const chained = lastTap.idx === i && now - lastTap.time < 450;
@@ -1891,6 +2090,7 @@ function onDown(e){
       clearTimeout(tileEditTimer);
       clearTimeout(tapActionTimer);
       drag = null;
+      unarmHandles();
       hideBubble();
 
       if (lastTap.count >= 3){
@@ -1911,7 +2111,7 @@ function onDown(e){
       return;
     }
 
-    if (selected !== i && e.type !== 'touchstart') { 
+    if (!handle && selected !== i && e.type !== 'touchstart') { 
       setSelection(i); 
     }
   }
@@ -1982,6 +2182,11 @@ function onDown(e){
 function onMove(e){
   const pt = getPt(e);
 
+  if (pendingEmptyTap){
+    pendingEmptyTap.maxMove = Math.max(pendingEmptyTap.maxMove,
+      Math.hypot(pt.clientX - pendingEmptyTap.x, pt.clientY - pendingEmptyTap.y));
+  }
+
   if (canvasCreate){
     const dy = pt.clientY - canvasCreate.y0;
     const dx = pt.clientX - canvasCreate.x0;
@@ -2045,16 +2250,38 @@ function onMove(e){
 
   if (e.cancelable) e.preventDefault();
 
+  /* Dragging a tile near either edge pulls the timeline along, exactly as
+     resizing does. The pointer is remembered so the auto-scroll loop can keep
+     re-applying the drag while the finger holds still. */
+  drag.lastClientX = pt.clientX;
+  drag.lastClientY = pt.clientY;
+  checkAutoScrollEdge(pt.clientY);
+
+  applyDrag();
+}
+
+/* Recompute the dragged tile from the last known pointer position. Called by
+   onMove and by the auto-scroll loop, so a held finger keeps extending or
+   moving the tile as the view scrolls. */
+function applyDrag(){
+  if (!drag || !drag.active || drag.lastClientY === undefined) return;
+  const dy = (drag.lastClientY - drag.y0);
+  const dx = (drag.lastClientX - drag.x0);
+
+  const ev = events[drag.i];
+  const step = 1;
+  /* Include how far the list has scrolled since the press. Without this the
+     tile would sit still while auto-scroll slid the timeline underneath it. */
+  const scrolled = scrollEl.scrollTop - drag.scroll0;
+
   if (!drag.moved){
-    if (Math.abs(dy) < 3 && Math.abs(dx) < 3 && drag.mode !== 'move') return;
+    if (Math.abs(dy) < 3 && Math.abs(dx) < 3 && !scrolled && drag.mode !== 'move') return;
     drag.moved = true;
     clearTimeout(tileEditTimer);
     clearTimeout(longPressTimer);
   }
 
-  const ev = events[drag.i];
-  const step = 1;
-  const deltaMin = snap(dy / pxPerMin, step);
+  const deltaMin = snap((dy + scrolled) / pxPerMin, step);
 
   if (drag.mode === 'move'){
     const stepLane = drag.step;
@@ -2071,13 +2298,13 @@ function onMove(e){
         vibrate(12);
       }
     }
-    const ns = Math.max(6 * 60, clampMoveInLane(drag.s0, drag.e0, deltaMin, lane, drag.i));
+    const ns = Math.max(ABS_START, clampMoveInLane(drag.s0, drag.e0, deltaMin, lane, drag.i));
     ev.start_min = ns; ev.end_min = ns + dur;
     gridTick(drag, ev.start_min);
     updateTileDOM(drag.i);
     showBubble(`${fmt(ev.start_min)} – ${fmt(ev.end_min)}`, yOf(ev.start_min) - 30, ev.lane_bias|0);
   } else if (drag.mode === 'top'){
-    ev.start_min = Math.max(6 * 60, clampResizeTop(drag.i, snap(drag.s0 + deltaMin, step)));
+    ev.start_min = Math.max(ABS_START, clampResizeTop(drag.i, snap(drag.s0 + deltaMin, step)));
     gridTick(drag, ev.start_min);
     updateTileDOM(drag.i);
     showBubble(`${fmt(ev.start_min)} · ${fmtDur(ev.end_min - ev.start_min)}`, yOf(ev.start_min) - 30, ev.lane_bias|0);
@@ -2093,6 +2320,25 @@ function onUp(e){
   clearTimeout(tileEditTimer);
   stopAutoScroll();
   setPinching(false);
+
+  /* Decide what that press on empty space actually was. A tap only counts if
+     the finger stayed put, the list did not scroll under it, and it was
+     quick — otherwise it was a flick or a drag and must not arm tile
+     creation. A confirmed tap also clears the current selection, which is
+     more reliable on touch than waiting for a synthetic click. */
+  if (pendingEmptyTap){
+    const p = pendingEmptyTap;
+    pendingEmptyTap = null;
+    const stillCreating = canvasCreate && canvasCreate.active;
+    const wasTap = !stillCreating &&
+                   p.maxMove <= 8 &&
+                   Math.abs(scrollEl.scrollTop - p.scroll0) <= 2 &&
+                   Date.now() - p.time < 400;
+    if (wasTap){
+      if (selected !== -1) setSelection(-1);
+      if (jiggleIdx !== -1) setJiggle(-1);
+    }
+  }
 
   if (canvasCreate){
     clearTimeout(longPressTimer);
@@ -2154,29 +2400,104 @@ function gridTick(holder, edgeMin){
 function unarmHandles(){
   canvas.querySelectorAll('.handle.armed').forEach(h => h.classList.remove('armed'));
 }
-/* Haptics: navigator.vibrate where it exists (Android), otherwise the iOS
-   switch-toggle trick. Note Apple closed the programmatic path in iOS 26.5,
-   so on very recent iOS this may stay silent — Settings has a test button. */
+/* ============================================================
+   Haptics
+   ------------------------------------------------------------
+   Three paths, because there is no single one that works:
+
+   1. navigator.vibrate — Android only. Safari has never shipped it.
+   2. Programmatic switch toggle — iOS 17.4 to 26.4. Clicking a <label>
+      bound to <input type="checkbox" switch> made the system play a tick.
+      Apple closed this in iOS 26.5, so on current iPhones it is silent
+      and nothing in JS can bring it back.
+   3. Direct-tap overlay — still works on iOS 26.5+. An invisible native
+      switch is laid over a control so the FINGER toggles it. Only works
+      where there is a real tap on that element; it cannot be used for
+      haptics fired mid-gesture (arming a resize, snapping, etc).
+
+   So on iOS 26.5+ buttons buzz and gestures do not. That is a platform
+   limit, not a bug here.
+   ============================================================ */
 const Haptics = (() => {
   let last = 0, label = null;
+
+  const ua = navigator.userAgent || '';
+  const iosMatch = ua.match(/(?:iPhone|iPad|iPod).*?OS (\d+)[._](\d+)/);
+  const iosVer = iosMatch ? { major: +iosMatch[1], minor: +iosMatch[2] } : null;
+  const isIOS = !!iosVer ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  // iOS 26.5 is where the programmatic path was patched out.
+  const scriptPathPatched = !!iosVer &&
+    (iosVer.major > 26 || (iosVer.major === 26 && iosVer.minor >= 5));
+  const hasVibrate = typeof navigator.vibrate === 'function';
+  let switchSupported = false;
+  try { switchSupported = 'switch' in document.createElement('input'); } catch(e){}
+
   function switchPulse(){
     if (!label) label = document.getElementById('hapticLabel');
     if (!label) return false;
     try { label.click(); return true; } catch(e){ return false; }
   }
+
   return {
-    supported(){
-      return (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function')
-             || !!document.getElementById('hapticLabel');
+    iosVersion: iosVer,
+    scriptPathPatched,
+    switchSupported,
+
+    /* Which path a scripted fire() will take right now. */
+    path(){
+      if (hasVibrate) return 'vibrate';
+      if (isIOS && scriptPathPatched) return 'tap-only';
+      if (switchSupported || document.getElementById('hapticLabel')) return 'switch';
+      return 'none';
     },
+
+    supported(){ return this.path() !== 'none'; },
+
     fire(ms, force){
       const now = Date.now();
       if (!force && now - last < 28) return;   // don't machine-gun the taptic engine
       last = now;
       try {
-        if (typeof navigator.vibrate === 'function' && navigator.vibrate(ms)) return;
+        if (hasVibrate && navigator.vibrate(ms)) return;
       } catch(e){}
+      if (scriptPathPatched) return;           // silent on iOS 26.5+, by Apple's design
       switchPulse();
+    },
+
+    /* Lay an invisible native switch over an element so a real tap on it
+       fires the system tick. The click still bubbles to the element, so
+       existing handlers keep working untouched. Idempotent. */
+    attach(el){
+      if (!el || el.dataset.hapticWired === '1') return;
+      el.dataset.hapticWired = '1';
+      if (!switchSupported) return;            // nothing to gain elsewhere
+      const wrap = document.createElement('span');
+      wrap.className = 'haptic-tap';
+      el.parentNode.insertBefore(wrap, el);
+      wrap.appendChild(el);
+      const sw = document.createElement('input');
+      sw.type = 'checkbox';
+      sw.setAttribute('switch', '');
+      sw.className = 'haptic-hit';
+      sw.tabIndex = -1;
+      sw.setAttribute('aria-hidden', 'true');
+      wrap.appendChild(sw);
+
+      // The switch sits ON TOP of the control, so it eats the tap. Let the
+      // native toggle happen (that is what plays the tick) and then hand the
+      // click on to the element underneath, so its own handler still runs.
+      // No preventDefault here — cancelling the toggle cancels the haptic.
+      sw.addEventListener('click', ev => {
+        ev.stopPropagation();
+        el.click();
+      });
+    },
+
+    /* Wire every button that is a plain tap. Safe to call repeatedly. */
+    wire(root){
+      (root || document).querySelectorAll('.btn:not([data-haptic="off"])')
+        .forEach(el => Haptics.attach(el));
     }
   };
 })();
@@ -2313,6 +2634,7 @@ function setTileSheetExpanded(on){
 }
 
 function openSheet(el){
+  Haptics.wire(el);      // sheets can gain buttons after load
   scrim.classList.add('on');
   scrim.classList.toggle('light', el === sheetTile);   // keep the timeline visible
   el.classList.add('on');
@@ -2329,24 +2651,28 @@ scrim.addEventListener('click', closeSheets);
 /* ---------- settings sheet handlers ---------- */
 document.getElementById('btnSettings').addEventListener('click', () => {
   sheetList.classList.remove('on');
-  document.getElementById('fSettingStart').value = fmt24(dayStart);
-  document.getElementById('fSettingEnd').value = fmt24(dayEnd);
+  document.getElementById('fSettingStart').value = fmt24(dayRange.start);
+  document.getElementById('fSettingEnd').value = fmt24(dayRange.end);
   openSheet(sheetSettings);
 });
 
 document.getElementById('btnSaveTimeRange').addEventListener('click', () => {
-  const s = parseTime(document.getElementById('fSettingStart').value);
+  const s  = parseTime(document.getElementById('fSettingStart').value);
   const en = parseTime(document.getElementById('fSettingEnd').value);
-  if (s !== null && en !== null && en > s) {
-    dayStart = s;
-    dayEnd = en;
-    pxPerMin = fitZoom();
-    render();
-    closeSheets();
-    toast('Time range updated');
-  } else {
+  if (s === null || en === null || en <= s){
     toast('Invalid time range. End must be after start.');
+    return;
   }
+  dayRange = { start: Math.max(ABS_START, s), end: Math.min(ABS_END, en) };
+  // resetRootView starts from dayRange and widens it if any tile falls
+  // outside, so narrowing the range never hides work you already have.
+  resetRootView();
+  pxPerMin = fitZoom();
+  save();
+  render();
+  closeSheets();
+  const widened = dayStart !== dayRange.start || dayEnd !== dayRange.end;
+  toast(widened ? 'Range set — widened to fit existing tiles' : 'Time range updated');
 });
 
 document.getElementById('btnOpenAuth').addEventListener('click', () => {
@@ -2445,10 +2771,10 @@ document.getElementById('vStart').addEventListener('change', function(e) {
   const ev = events[editing];
   let m = parseTime(e.target.value);
   if (m !== null) {
-    m = Math.max(6 * 60, Math.min(ROOT_END, m));
+    m = clampMin(m);
     const dur = ev.end_min - ev.start_min;
     const delta = m - ev.start_min;
-    const ns = Math.max(6 * 60, clampMoveInLane(ev.start_min, ev.end_min, delta, ev.lane_bias|0, editing));
+    const ns = Math.max(ABS_START, clampMoveInLane(ev.start_min, ev.end_min, delta, ev.lane_bias|0, editing));
     if (ns !== m) toast('Blocked by boundary or another tile');
     ev.start_min = ns;
     ev.end_min = ns + dur;
@@ -2461,7 +2787,7 @@ document.getElementById('vEnd').addEventListener('change', function(e) {
   const ev = events[editing];
   let m = parseTime(e.target.value);
   if (m !== null) {
-    m = Math.max(6 * 60, Math.min(ROOT_END, m));
+    m = clampMin(m);
     if (m <= ev.start_min) m = ev.start_min + MIN_DUR; 
     const delta = m - ev.end_min;
     const ne = clampResizeBottom(editing, ev.end_min + delta);
@@ -2506,7 +2832,7 @@ document.querySelectorAll('[data-step]').forEach(btn => {
 
     if (kind === 'start'){
       const dur = ev.end_min - ev.start_min;
-      const ns = Math.max(6 * 60, clampMoveInLane(ev.start_min, ev.end_min, d, ev.lane_bias|0, editing));
+      const ns = Math.max(ABS_START, clampMoveInLane(ev.start_min, ev.end_min, d, ev.lane_bias|0, editing));
       if (ns === ev.start_min) return toast('Blocked by boundary or another tile');
       ev.start_min = ns; ev.end_min = ns + dur;
     } else if (kind === 'end'){
@@ -3066,6 +3392,7 @@ ensureMeta();
 resetRootView();
 render();
 updateNotificationBtn();
+Haptics.wire();
 
 if (!Store.persistent){
   toast('This browser will not save locally — sync is your storage here');
