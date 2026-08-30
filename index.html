@@ -193,8 +193,16 @@
     border-radius:50%; background:#e5484d; color:#fff;
     border:1.5px solid rgba(0,0,0,.4);
     display:flex; align-items:center; justify-content:center;
-    font-size:13px; font-weight:800; line-height:1; z-index:9;
+    font-size:13px; font-weight:800; line-height:1; z-index:11;
     pointer-events:auto; box-shadow:0 2px 7px rgba(0,0,0,.55);
+  }
+  /* The visible dot stays 23px, but the tappable area is padded out to the
+     44px Apple recommends. The pseudo-element is not a hit-test target
+     itself, so taps inside it still report .tile-del as e.target. */
+  .tile-del::before{
+    content:''; position:absolute; left:50%; top:50%;
+    width:44px; height:44px; transform:translate(-50%,-50%);
+    border-radius:50%;
   }
   .tile-del:active{ transform:scale(.88); }
 
@@ -721,6 +729,9 @@ let selected = -1;
 let editing = -1;
 let lastTap = { time: 0, idx: -1, count: 0 };
 let lastEmptyTap = null;
+/* An empty-space press that has not yet proved itself a tap rather than a
+   scroll flick. Promoted to lastEmptyTap in onUp, discarded on any movement. */
+let pendingEmptyTap = null;
 let tapActionTimer = null;
 let jiggleIdx = -1;          // tile currently shaking with a delete badge
 
@@ -1396,6 +1407,10 @@ function rebuildHandles() {
     hd.style.left  = left + 'px';
     hd.style.width = laneW + 'px';
     hd.style.top   = (side === 'top' ? top - 21 : top + h - 21) + 'px';
+    /* On a short tile two 22px grips would cover the entire body, leaving
+       nowhere to tap or drag it. Give them a share of the height instead so
+       a usable band always survives in the middle. */
+    if (h < 52) hd.style.setProperty('--grip-hit', Math.max(9, h / 3).toFixed(1) + 'px');
     // The grip is a real element, not a pseudo-element, so it is what the
     // pointer actually hits. closest('.handle') still resolves from it, so
     // every resize code path below is untouched.
@@ -1470,6 +1485,8 @@ function updateTileDOM(i){
     hd.style.width = laneW + 'px';
     const side = hd.dataset.handle;
     hd.style.top = (side === 'top' ? top - 21 : top + h - 21) + 'px';
+    if (h < 52) hd.style.setProperty('--grip-hit', Math.max(9, h / 3).toFixed(1) + 'px');
+    else hd.style.removeProperty('--grip-hit');
   });
 }
 
@@ -1601,6 +1618,9 @@ scrollEl.addEventListener('scroll', () => {
   if (typeof canvasCreate !== 'undefined' && canvasCreate && !canvasCreate.active){
     clearTimeout(longPressTimer); canvasCreate = null;
   }
+  /* Scrolling proves the press was not a tap — forget it either way. */
+  pendingEmptyTap = null;
+  lastEmptyTap = null;
   if (scrollRAF) return;
   scrollRAF = requestAnimationFrame(() => {
     drawGrid();
@@ -1951,7 +1971,12 @@ function onDown(e){
     const isSecondTap = lastEmptyTap &&
       now - lastEmptyTap.time < 450 &&
       Math.hypot(pt.clientX - lastEmptyTap.x, pt.clientY - lastEmptyTap.y) < 44;
-    lastEmptyTap = { time: now, x: pt.clientX, y: pt.clientY };
+    /* Do NOT bank this press as a tap yet. A scroll flick also starts with a
+       touch on empty space, and banking it here meant two quick flicks in the
+       same spot read as a double tap and spawned a tile. onUp promotes it
+       only if the finger actually stayed put. */
+    pendingEmptyTap = { time: now, x: pt.clientX, y: pt.clientY,
+                        scroll0: scrollEl.scrollTop, maxMove: 0 };
 
     canvasCreate = {
       startYMin: alignedStart,
@@ -1990,7 +2015,11 @@ function onDown(e){
   const i = parseInt((handle || tile).dataset.i, 10);
   const ev = events[i];
 
-  if (!handle) {
+  /* Tap counting runs for grip presses too. On a short tile the grips cover
+     the whole body, so gating this on !handle meant a double tap there could
+     never reach the editor — it only ever looked like a resize attempt.
+     A resize needs a 350ms hold, so a quick second tap is never ambiguous. */
+  {
     const now = Date.now();
     if (jiggleIdx !== -1 && jiggleIdx !== i) setJiggle(-1);
     const chained = lastTap.idx === i && now - lastTap.time < 450;
@@ -2001,6 +2030,7 @@ function onDown(e){
       clearTimeout(tileEditTimer);
       clearTimeout(tapActionTimer);
       drag = null;
+      unarmHandles();
       hideBubble();
 
       if (lastTap.count >= 3){
@@ -2021,7 +2051,7 @@ function onDown(e){
       return;
     }
 
-    if (selected !== i && e.type !== 'touchstart') { 
+    if (!handle && selected !== i && e.type !== 'touchstart') { 
       setSelection(i); 
     }
   }
@@ -2091,6 +2121,11 @@ function onDown(e){
 
 function onMove(e){
   const pt = getPt(e);
+
+  if (pendingEmptyTap){
+    pendingEmptyTap.maxMove = Math.max(pendingEmptyTap.maxMove,
+      Math.hypot(pt.clientX - pendingEmptyTap.x, pt.clientY - pendingEmptyTap.y));
+  }
 
   if (canvasCreate){
     const dy = pt.clientY - canvasCreate.y0;
@@ -2203,6 +2238,28 @@ function onUp(e){
   clearTimeout(tileEditTimer);
   stopAutoScroll();
   setPinching(false);
+
+  /* Decide what that press on empty space actually was. A tap only counts if
+     the finger stayed put, the list did not scroll under it, and it was
+     quick — otherwise it was a flick or a drag and must not arm tile
+     creation. A confirmed tap also clears the current selection, which is
+     more reliable on touch than waiting for a synthetic click. */
+  if (pendingEmptyTap){
+    const p = pendingEmptyTap;
+    pendingEmptyTap = null;
+    const stillCreating = canvasCreate && canvasCreate.active;
+    const wasTap = !stillCreating &&
+                   p.maxMove <= 8 &&
+                   Math.abs(scrollEl.scrollTop - p.scroll0) <= 2 &&
+                   Date.now() - p.time < 400;
+    if (wasTap){
+      lastEmptyTap = { time: Date.now(), x: p.x, y: p.y };
+      if (selected !== -1) setSelection(-1);
+      if (jiggleIdx !== -1) setJiggle(-1);
+    } else {
+      lastEmptyTap = null;
+    }
+  }
 
   if (canvasCreate){
     clearTimeout(longPressTimer);
