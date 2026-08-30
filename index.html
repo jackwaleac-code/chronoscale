@@ -117,13 +117,24 @@
   .tile.drag{z-index:8; transform: scale(1.02); touch-action:none;}
   .tile.drag .tile-bg { box-shadow: 0 12px 28px rgba(0,0,0,.65); filter: brightness(1.1); opacity: 0.55; }
   
+  /* ---- tile text -----------------------------------------------------
+     Everything is sized off two custom properties set by JS:
+       --tt  title font-size in px
+       --tu  the vertical space the text is actually allowed to occupy
+     font-size:0 / line-height:0 on the container stops the body's
+     15px/1.4 strut from being inherited — otherwise every line box has a
+     21px floor and shrinking the font changes nothing. Each line then
+     declares an explicit height, so its size is arithmetic, not a guess. */
   .t-sticky {
     position: sticky; top: 0;
-    padding: 5px 8px; max-height: 100%; overflow: hidden;
+    padding: var(--tp, 5px) 8px;
+    max-height: var(--tu, 100%); overflow: hidden;
+    font-size: 0; line-height: 0;
     color: #ffffff; text-shadow: 0 1px 3px rgba(0,0,0,0.8);
     z-index: 2; pointer-events: none;
   }
-  
+  .tile.no-text .t-sticky { display: none; }
+
   @keyframes marquee {
     0% { transform: translateX(0); }
     30% { transform: translateX(0); }
@@ -132,24 +143,35 @@
   }
 
   .t-sticky .t-title-wrap {
-    overflow: hidden; white-space: nowrap; width: 100%; position: relative;
+    display: block; overflow: hidden; white-space: nowrap;
+    width: 100%; position: relative;
+    height: calc(var(--tt, 13px) * 1.25);
   }
   .t-sticky .t-title {
-    font-weight: 750; font-size: 13px; line-height: 1.25;
-    display: inline-block; white-space: nowrap;
+    font-weight: 750;
+    font-size: var(--tt, 13px); line-height: 1.25;
+    display: inline-block; vertical-align: top; white-space: nowrap;
   }
   .t-sticky .t-title.overflowing {
     animation: marquee 6s linear infinite;
   }
 
-  .t-sticky .t-time{font-size:10.5px; opacity:.9; margin-top:1px; line-height:1.25;
-                overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-  .t-sticky .t-dur{font-size:10px; opacity:.85; line-height:1.25;
-                overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-  
-  /* Very short tiles give the text almost the whole tile to live in.
-     Keep these paddings in sync with TILE_PAD_V / TILE_PAD_V_TIGHT in JS. */
-  .tile.tight .t-sticky {padding:1px 5px;}
+  /* Sub-lines scale with the title and are hidden unless JS says a whole
+     line fits, so they are never drawn half-way. */
+  .t-sticky .t-time, .t-sticky .t-dur {
+    display: none; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .tile.show-time .t-time {
+    display: block; opacity: .9; margin-top: 1px;
+    font-size: calc(var(--tt, 13px) * .8); line-height: 1.25;
+    height: calc(var(--tt, 13px) * .8 * 1.25);
+  }
+  .tile.show-dur .t-dur {
+    display: block; opacity: .85;
+    font-size: calc(var(--tt, 13px) * .76); line-height: 1.25;
+    height: calc(var(--tt, 13px) * .76 * 1.25);
+  }
   .tile .badge{position:absolute; right:5px; top:5px; background:rgba(0,0,0,.45);
                color:#fff; font-size:10px; font-weight:700; border-radius:999px;
                min-width:17px; height:17px; padding:0 5px;
@@ -1094,50 +1116,95 @@ function drawGrid(){
   }
 }
 
-/* --- tile text fitting -------------------------------------------------
-   A line of text occupies exactly font-size * line-height pixels, so we can
-   solve for the biggest font that still fits inside the tile instead of
-   guessing. Anything that cannot fit a whole line is hidden rather than
-   clipped half-way through the glyphs. */
-const TILE_LH          = 1.25;  // line-height on .t-title / .t-time / .t-dur
-const TITLE_MAX_PX     = 13;    // .t-sticky .t-title font-size
-const TITLE_MIN_PX     = 8;     // below this it is unreadable anyway
-const TIME_LINE_PX     = 10.5 * TILE_LH + 1;  // .t-time + its margin-top
-const DUR_LINE_PX      = 10   * TILE_LH;      // .t-dur
-const TILE_PAD_V       = 10;    // .t-sticky padding: 5px top + 5px bottom
-const TILE_PAD_V_TIGHT = 2;     // .tile.tight .t-sticky padding: 1px + 1px
-const TIGHT_BELOW_PX   = TITLE_MAX_PX * TILE_LH + TILE_PAD_V;  // 26.25px: below this, reclaim the padding
+/* ============================================================
+   Tile text layout
+   ------------------------------------------------------------
+   The space a label can use is NOT the tile's height. Tiles have a 16px
+   minimum, so once you zoom out far enough a short task is drawn taller
+   than its real duration and the following tile starts before it ends —
+   and that following tile paints over the bottom of the label. Fitting
+   text to tile height therefore still produces vertically cut text.
 
-function fitTileText(el, h){
-  const titleEl = el.querySelector('.t-title');
-  if (!titleEl) return;
-  const timeEl = el.querySelector('.t-time');
-  const durEl  = el.querySelector('.t-dur');
+   So the budget is: tile height, capped by the distance to the next tile
+   in the same lane. Text is fitted to that budget.
 
-  const tight = h < TIGHT_BELOW_PX;
-  el.classList.toggle('tight', tight);
-  let avail = h - (tight ? TILE_PAD_V_TIGHT : TILE_PAD_V);
+   Every line occupies exactly font-size * line-height and the CSS sets
+   those heights explicitly, so the largest font that fits is a division,
+   not a guess or a measure-and-retry loop. A line that cannot be drawn
+   whole is not drawn at all; if even the smallest readable title cannot
+   fit, the label is dropped rather than smeared.
+   ============================================================ */
+const MIN_TILE_H = 16;      // tiles never render shorter than this
+const TT_MAX     = 13;      // preferred title size, px
+const TT_MIN     = 7;       // below this, drop the label entirely
+const TT_LH      = 1.25;    // must match .t-title line-height
+const TT_PAD     = 5;       // .t-sticky vertical padding when there is room
+const TT_TIME_R  = 0.8;     // .t-time size, as a fraction of the title
+const TT_DUR_R   = 0.76;    // .t-dur  size, as a fraction of the title
+const TT_SUB_LH  = 1.25;    // must match sub-line line-height
 
-  // Title keeps its normal size while there is room, then shrinks to fit.
-  const size = Math.max(TITLE_MIN_PX, Math.min(TITLE_MAX_PX, avail / TILE_LH));
-  titleEl.style.fontSize = size.toFixed(2) + 'px';
-  avail -= size * TILE_LH;
+function tileHeight(ev){
+  return Math.max(MIN_TILE_H, (ev.end_min - ev.start_min) * pxPerMin);
+}
 
-  // Time and duration only appear if a full line of each still fits.
-  const showTime = !!timeEl && avail >= TIME_LINE_PX;
-  if (timeEl) timeEl.style.display = showTime ? '' : 'none';
-  if (showTime) avail -= TIME_LINE_PX;
+/* Visible vertical space for tile i: its own height, cut short by the
+   nearest tile below it in the same lane. */
+function textBudget(i){
+  const ev = events[i];
+  const lane = ev.lane_bias | 0;
+  const top = yOf(ev.start_min);
+  let budget = tileHeight(ev);
+  for (let j = 0; j < events.length; j++){
+    if (j === i) continue;
+    const other = events[j];
+    if ((other.lane_bias | 0) !== lane) continue;
+    const gap = yOf(other.start_min) - top;
+    if (gap > 0 && gap < budget) budget = gap;
+  }
+  return budget;
+}
 
-  const showDur = !!durEl && showTime && avail >= DUR_LINE_PX;
-  if (durEl) durEl.style.display = showDur ? '' : 'none';
+function layoutTileText(el, budget){
+  // Padding is a luxury: it only appears once a full-size title already fits.
+  const pad = Math.max(0, Math.min(TT_PAD, (budget - TT_MAX * TT_LH) / 2));
+  let room = budget - 2 * pad;
 
-  el.classList.toggle('short', !showTime);
+  const tt = Math.min(TT_MAX, room / TT_LH);
+  if (tt < TT_MIN){                 // nothing readable fits — show no text
+    el.classList.add('no-text');
+    el.classList.remove('show-time', 'show-dur');
+    return;
+  }
+  el.classList.remove('no-text');
+  el.style.setProperty('--tt', tt.toFixed(2) + 'px');
+  el.style.setProperty('--tp', pad.toFixed(2) + 'px');
+  el.style.setProperty('--tu', budget.toFixed(2) + 'px');
+
+  room -= tt * TT_LH;
+  const timeH = tt * TT_TIME_R * TT_SUB_LH + 1;   // + margin-top
+  const durH  = tt * TT_DUR_R  * TT_SUB_LH;
+  const showTime = room >= timeH;
+  const showDur  = showTime && (room - timeH) >= durH;
+  el.classList.toggle('show-time', showTime);
+  el.classList.toggle('show-dur',  showDur);
+}
+
+/* Horizontal overflow is the one thing that has to be measured, because it
+   depends on the glyphs. Long titles scroll instead of being truncated. */
+/* Moving or resizing one tile changes how much of its neighbours remains
+   visible, so their budgets have to be recomputed too. This only writes CSS
+   variables — no layout is read, so it is safe to call every drag frame. */
+function refreshAllTileText(){
+  for (let j = 0; j < events.length; j++){
+    const node = canvas.querySelector(`.tile[data-i="${j}"]`);
+    if (node) layoutTileText(node, textBudget(j));
+  }
 }
 
 function markTitleOverflow(titleEl, titleWrap){
-  const overflowDist = titleEl.scrollWidth - titleWrap.clientWidth;
-  if (overflowDist > 4) {
-    titleEl.style.setProperty('--scroll-dist', `-${overflowDist + 12}px`);
+  const dist = titleEl.scrollWidth - titleWrap.clientWidth;
+  if (dist > 4){
+    titleEl.style.setProperty('--scroll-dist', `-${dist + 12}px`);
     titleEl.classList.add('overflowing');
   } else {
     titleEl.classList.remove('overflowing');
@@ -1153,7 +1220,7 @@ function drawTiles(){
   events.forEach((ev, i) => {
     const lane = ev.lane_bias|0;
     const isPast = ev.end_min <= currentMin;
-    const top = yOf(ev.start_min), h = Math.max(16, (ev.end_min - ev.start_min) * pxPerMin);
+    const top = yOf(ev.start_min), h = tileHeight(ev);
     const el = document.createElement('div');
     
     el.className = 'tile' + (i === selected ? ' sel' : '')
@@ -1207,7 +1274,7 @@ function drawTiles(){
     el.appendChild(sticky);
 
     // Size the text to the tile, then measure marquee overflow once laid out.
-    fitTileText(el, h);
+    layoutTileText(el, textBudget(i));
     requestAnimationFrame(() => markTitleOverflow(t, titleWrap));
 
     if (ev.location) {
@@ -1259,7 +1326,7 @@ function rebuildHandles() {
   const { gutter, laneW, gap } = laneGeometry();
   const lane = ev.lane_bias | 0;
   const top = yOf(ev.start_min);
-  const h = Math.max(16, (ev.end_min - ev.start_min) * pxPerMin);
+  const h = tileHeight(ev);
   const left = gutter + lane * (laneW + gap);
 
   ['top','bot'].forEach(side => {
@@ -1289,7 +1356,7 @@ function updateTileDOM(i){
   const { gutter, laneW, gap } = laneGeometry();
   const lane = ev.lane_bias | 0;
   const top = yOf(ev.start_min);
-  const h = Math.max(16, (ev.end_min - ev.start_min) * pxPerMin);
+  const h = tileHeight(ev);
   const left = gutter + lane * (laneW + gap);
 
   el.style.top = top + 'px';
@@ -1306,7 +1373,8 @@ function updateTileDOM(i){
   const durEl = el.querySelector('.t-dur');
   if (durEl) durEl.textContent = `(${fmtDur(ev.end_min - ev.start_min)})`;
 
-  fitTileText(el, h);
+  layoutTileText(el, textBudget(i));
+  refreshAllTileText();
   if (titleEl && titleWrap) markTitleOverflow(titleEl, titleWrap);
 
   const currentMin = nowMin();
