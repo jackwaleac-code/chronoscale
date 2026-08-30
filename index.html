@@ -777,8 +777,13 @@ let pxPerMin = 1.6;
 let selected = -1;
 let editing = -1;
 let lastTap = { time: 0, idx: -1, count: 0 };
-/* How long to hold on empty space before a new tile starts under the finger. */
+/* How long to hold on empty space before the selection band starts. */
 const CREATE_HOLD_MS = 400;
+/* Double-tap window for making a tile. Only CONFIRMED taps count toward it. */
+const DOUBLE_TAP_MS = 400;
+const DOUBLE_TAP_PX = 40;
+/* A confirmed tap, kept so the next press can see it was a real double tap. */
+let lastEmptyTap = null;
 /* An empty-space press that may turn out to be a tap (deselect), a scroll
    flick, or a hold that creates a tile. Resolved in onUp. */
 let pendingEmptyTap = null;
@@ -1759,8 +1764,10 @@ scrollEl.addEventListener('scroll', () => {
   if (typeof canvasCreate !== 'undefined' && canvasCreate && !canvasCreate.active){
     clearTimeout(longPressTimer); canvasCreate = null;
   }
-  /* Scrolling proves the press was not a tap — forget it either way. */
+  /* Scrolling proves the press was not a tap — forget it, and break any
+     double-tap chain so a flick can never combine with an earlier tap. */
   pendingEmptyTap = null;
+  lastEmptyTap = null;
   if (scrollRAF) return;
   scrollRAF = requestAnimationFrame(() => {
     drawGrid();
@@ -2109,6 +2116,15 @@ function onDown(e){
     if (jiggleIdx !== -1) setJiggle(-1);   // tap off the tile to stop shaking
 
     const now = Date.now();
+    /* Double tap on empty space makes a tile, and the second finger can stay
+       down to drag out its length. This is safe now because lastEmptyTap is
+       only ever set by a CONFIRMED tap (see onUp): a press that moved, that
+       scrolled the list, or that was held counts for nothing. That is what
+       made scroll flicks spawn tiles before. */
+    const isSecondTap = lastEmptyTap &&
+      now - lastEmptyTap.time < DOUBLE_TAP_MS &&
+      Math.hypot(pt.clientX - lastEmptyTap.x, pt.clientY - lastEmptyTap.y) < DOUBLE_TAP_PX;
+
     /* Track the press so onUp can tell a tap (deselect) from a flick. */
     pendingEmptyTap = { time: now, x: pt.clientX, y: pt.clientY,
                         scroll0: scrollEl.scrollTop, maxMove: 0 };
@@ -2125,21 +2141,23 @@ function onDown(e){
       isTouch: e.type === 'touchstart'
     };
 
-    /* Hold on empty space, then the first movement decides what you meant:
-       dragging down (or straight up) sizes a NEW TILE, dragging sideways
-       rubber-bands a SELECTION over existing tiles. Releasing without moving
-       makes a tile, as before. Any movement or scroll before the hold
-       completes cancels it, so this never fights with scrolling. */
+    if (isSecondTap){
+      lastEmptyTap = null;
+      pendingEmptyTap = null;
+      beginTileCreate();
+      return;
+    }
+
+    /* Hold on empty space to rubber-band a selection over existing tiles.
+       Any movement or scroll before the hold completes cancels it, so this
+       never fights with scrolling. */
     longPressTimer = setTimeout(() => {
       if (!canvasCreate || canvasCreate.active) return;
-      if (canvasCreate.maxMove > 8) return gdbg('  create: not armed, moved');
+      if (canvasCreate.maxMove > 8) return gdbg('  marquee: not armed, moved');
       if (Math.abs(scrollEl.scrollTop - canvasCreate.scroll0) > 2)
-        return gdbg('  create: not armed, list scrolled');
-
-      pendingEmptyTap = null;        // this press is a hold, not a tap
-      canvasCreate.armed = true;
+        return gdbg('  marquee: not armed, list scrolled');
       vibrate(22);
-      gdbg('long press armed -> drag down to create, sideways to select');
+      beginMarquee(canvasCreate.x0, canvasCreate.y0);
     }, CREATE_HOLD_MS);
     return;
   }
@@ -2282,16 +2300,8 @@ function onMove(e){
     canvasCreate.lastClientY = pt.clientY;
     canvasCreate.maxMove = Math.max(canvasCreate.maxMove || 0, Math.hypot(dx, dy));
 
-    /* Armed but undecided: the first real movement picks the gesture.
-       Sideways means you are sweeping across tiles, so that is a selection;
-       anything else is sizing a new tile. */
-    if (canvasCreate.armed && !canvasCreate.active && Math.hypot(dx, dy) > 10){
-      if (Math.abs(dx) > Math.abs(dy)) { beginMarquee(pt.clientX, pt.clientY); return; }
-      beginTileCreate();
-    }
-
     if (!canvasCreate.active) {
-      if (!canvasCreate.armed && Math.hypot(dx, dy) > 8) {
+      if (Math.hypot(dx, dy) > 8) {
         clearTimeout(longPressTimer);
         canvasCreate = null;
       }
@@ -2403,7 +2413,11 @@ function applyDrag(){
       events[m.k].end_min   = m.e + shift;
     });
     gridTick(drag, events[drag.i].start_min);
-    render();
+    /* Move the existing nodes rather than calling render(). A touch gesture is
+       delivered to the element that received touchstart, so rebuilding the
+       tiles mid-drag detaches that node and every later touchmove is lost —
+       the group would lurch once and then freeze. */
+    drag.group.forEach(m => updateTileDOM(m.k));
     paintMulti();
     showBubble(`${drag.group.length} tiles · ${shift >= 0 ? '+' : ''}${shift}m`,
                yOf(events[drag.i].start_min) - 30, events[drag.i].lane_bias | 0);
@@ -2471,6 +2485,8 @@ function beginTileCreate(){
 /* ---- marquee ---- */
 function beginMarquee(x, y){
   canvasCreate = null;
+  pendingEmptyTap = null;   // a hold is not a tap; do not let it chain
+  lastEmptyTap = null;
   clearTimeout(longPressTimer);
   setSelection(-1);
   const r = canvas.getBoundingClientRect();
@@ -2536,10 +2552,6 @@ function onUp(e){
     return;
   }
 
-  /* An armed hold that never moved still means "make a tile here". */
-  if (canvasCreate && canvasCreate.armed && !canvasCreate.active){
-    beginTileCreate();
-  }
 
   /* Decide what that press on empty space actually was. A tap only counts if
      the finger stayed put, the list did not scroll under it, and it was
@@ -2555,9 +2567,12 @@ function onUp(e){
                    Math.abs(scrollEl.scrollTop - p.scroll0) <= 2 &&
                    Date.now() - p.time < 400;
     if (wasTap){
+      lastEmptyTap = { time: Date.now(), x: p.x, y: p.y };
       if (selected !== -1) setSelection(-1);
       if (jiggleIdx !== -1) setJiggle(-1);
       clearMulti();          // a plain tap on empty space drops the set too
+    } else {
+      lastEmptyTap = null;   // a flick, a hold or a scroll never chains
     }
   }
 
