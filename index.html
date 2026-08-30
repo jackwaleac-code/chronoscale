@@ -91,6 +91,33 @@
     background:rgba(110, 168, 254, 0.15); border-radius:3px; pointer-events:none;
   }
 
+  /* ---- multi-selection ---- */
+  #marquee{
+    position:absolute; z-index:14; pointer-events:none;
+    border:1.5px solid var(--accent); border-radius:4px;
+    background:rgba(110,168,254,.16);
+  }
+  .tile.multi .tile-bg{
+    box-shadow:0 0 0 2px var(--accent), 0 6px 18px rgba(0,0,0,.5);
+  }
+  #multibar{
+    position:fixed; left:50%; transform:translateX(-50%) translateY(-140%);
+    top:calc(env(safe-area-inset-top,0px) + 8px); z-index:22;
+    display:flex; align-items:center; gap:10px;
+    background:rgba(29,32,39,.96); border:1px solid var(--line);
+    border-radius:11px; padding:7px 9px 7px 13px;
+    box-shadow:0 6px 20px rgba(0,0,0,.55); backdrop-filter:blur(8px);
+    transition:transform .18s cubic-bezier(.32,.72,0,1); font-size:13px;
+  }
+  #multibar.on{ transform:translateX(-50%) translateY(0); }
+  #multibar-count{ font-weight:700; white-space:nowrap; }
+  #multibar button{
+    border:none; border-radius:8px; padding:7px 11px; font-size:13px;
+    font-weight:650; font-family:inherit; cursor:pointer;
+    background:var(--panel-hi); color:var(--text);
+  }
+  #multibar button.danger{ background:#3a2226; color:#ff8a8a; }
+
   .hourline{position:absolute; left:0; top:0; right:0; height:0;
             border-top:1px solid var(--grid-minor); pointer-events:none;
             will-change: transform;}
@@ -663,6 +690,12 @@
 <div id="toast"></div>
 <div id="gdbg"></div>
 
+<div id="multibar">
+  <span id="multibar-count">0 tiles selected</span>
+  <button id="multibar-del" class="danger">Delete</button>
+  <button id="multibar-clear">Done</button>
+</div>
+
 <!-- iOS has no Vibration API. Toggling a <input type="checkbox" switch> is the
      only thing that reaches the Taptic Engine from a web page, so this hidden
      pair gets clicked whenever we want a buzz. It must stay rendered — display:none
@@ -756,6 +789,53 @@ function setJiggle(idx){
   if (jiggleIdx === idx) return;
   jiggleIdx = idx;
   drawTiles();
+}
+
+/* ============================================================
+   Multi-selection
+   ------------------------------------------------------------
+   A marquee dragged over empty space collects tiles into multiSel. Once a
+   set exists, dragging any member moves the whole group and the action bar
+   can delete them together.
+   ============================================================ */
+let multiSel = new Set();
+let marquee = null;
+
+function clearMulti(){
+  if (!multiSel.size) return;
+  multiSel = new Set();
+  paintMulti();
+  renderMultiBar();
+}
+
+function paintMulti(){
+  canvas.querySelectorAll('.tile').forEach(t => {
+    t.classList.toggle('multi', multiSel.has(parseInt(t.dataset.i, 10)));
+  });
+}
+
+function renderMultiBar(){
+  const bar = document.getElementById('multibar');
+  if (!bar) return;
+  const n = multiSel.size;
+  bar.classList.toggle('on', n > 0);
+  if (n > 0) bar.querySelector('#multibar-count').textContent =
+    n + (n === 1 ? ' tile selected' : ' tiles selected');
+}
+
+function deleteMulti(){
+  if (!multiSel.size) return;
+  const n = multiSel.size;
+  // Descending, so each splice cannot shift an index we still need.
+  [...multiSel].sort((a, b) => b - a).forEach(i => {
+    if (i >= 0 && i < events.length) events.splice(i, 1);
+  });
+  multiSel = new Set();
+  jiggleIdx = -1; editing = -1;
+  setSelection(-1);
+  vibrate(26);
+  save(); render(); renderMultiBar();
+  toast(n + (n === 1 ? ' tile deleted' : ' tiles deleted'));
 }
 
 function deleteTileAt(i){
@@ -1404,6 +1484,7 @@ function drawTiles(){
   if (selected >= 0 && selected < events.length){
     rebuildHandles();
   }
+  paintMulti();      // tiles are rebuilt from scratch, so re-apply the marks
 }
 
 function rebuildHandles() {
@@ -2044,30 +2125,21 @@ function onDown(e){
       isTouch: e.type === 'touchstart'
     };
 
-    /* Hold on empty space to start a tile, then keep the finger down and drag
-       to set its length. Any movement or scroll before the hold completes
-       cancels it, so this never fights with scrolling. */
+    /* Hold on empty space, then the first movement decides what you meant:
+       dragging down (or straight up) sizes a NEW TILE, dragging sideways
+       rubber-bands a SELECTION over existing tiles. Releasing without moving
+       makes a tile, as before. Any movement or scroll before the hold
+       completes cancels it, so this never fights with scrolling. */
     longPressTimer = setTimeout(() => {
       if (!canvasCreate || canvasCreate.active) return;
       if (canvasCreate.maxMove > 8) return gdbg('  create: not armed, moved');
       if (Math.abs(scrollEl.scrollTop - canvasCreate.scroll0) > 2)
         return gdbg('  create: not armed, list scrolled');
 
-      pendingEmptyTap = null;        // this press is a create, not a tap
-      canvasCreate.active = true;
+      pendingEmptyTap = null;        // this press is a hold, not a tap
+      canvasCreate.armed = true;
       vibrate(22);
-      const startM = canvasCreate.startYMin;
-      const newTile = makeTile(startM, Math.min(dayEnd, startM + 1), 'New tile',
-                               PALETTE[events.length % PALETTE.length]);
-      newTile.lane_bias = canvasCreate.lane;
-      events.push(newTile);
-      editing = events.length - 1;
-      events[editing].end_min = clampResizeBottom(editing, events[editing].end_min);
-      canvasCreate.lastCell = null;
-      setSelection(editing);
-      render();
-      updateTileDOM(editing);
-      gdbg('long press -> new tile');
+      gdbg('long press armed -> drag down to create, sideways to select');
     }, CREATE_HOLD_MS);
     return;
   }
@@ -2131,6 +2203,15 @@ function onDown(e){
   const g = laneGeometry();
   drag.step = Math.max(1, g.laneW + g.gap);
 
+  /* Dragging any member of a multi-selection carries the whole set, keeping
+     the tiles' relative spacing. Grabbing anything else drops the set. */
+  if (multiSel.has(i) && !handle){
+    drag.group = [...multiSel].map(k => ({ k, s: events[k].start_min,
+                                              e: events[k].end_min }));
+  } else if (multiSel.size && !multiSel.has(i)){
+    clearMulti();
+  }
+
   if (handle) {
     /* Same rule as tiles: hold still to arm the resize, otherwise scroll. */
     drag.pendingActive = true;
@@ -2187,14 +2268,30 @@ function onMove(e){
       Math.hypot(pt.clientX - pendingEmptyTap.x, pt.clientY - pendingEmptyTap.y));
   }
 
+  if (marquee){
+    if (e.cancelable) e.preventDefault();
+    checkAutoScrollEdge(pt.clientY);
+    marquee.lastClientX = pt.clientX; marquee.lastClientY = pt.clientY;
+    updateMarquee(pt.clientX, pt.clientY);
+    return;
+  }
+
   if (canvasCreate){
     const dy = pt.clientY - canvasCreate.y0;
     const dx = pt.clientX - canvasCreate.x0;
     canvasCreate.lastClientY = pt.clientY;
     canvasCreate.maxMove = Math.max(canvasCreate.maxMove || 0, Math.hypot(dx, dy));
 
+    /* Armed but undecided: the first real movement picks the gesture.
+       Sideways means you are sweeping across tiles, so that is a selection;
+       anything else is sizing a new tile. */
+    if (canvasCreate.armed && !canvasCreate.active && Math.hypot(dx, dy) > 10){
+      if (Math.abs(dx) > Math.abs(dy)) { beginMarquee(pt.clientX, pt.clientY); return; }
+      beginTileCreate();
+    }
+
     if (!canvasCreate.active) {
-      if (Math.hypot(dx, dy) > 8) {
+      if (!canvasCreate.armed && Math.hypot(dx, dy) > 8) {
         clearTimeout(longPressTimer);
         canvasCreate = null;
       }
@@ -2283,10 +2380,46 @@ function applyDrag(){
 
   const deltaMin = snap((dy + scrolled) / pxPerMin, step);
 
+  if (drag.group && drag.mode === 'move'){
+    /* Shift the set as one block. The shift is trimmed so no member leaves
+       the day or lands on a tile outside the selection. */
+    let shift = deltaMin;
+    const lo = Math.min(...drag.group.map(m => m.s));
+    const hi = Math.max(...drag.group.map(m => m.e));
+    shift = Math.max(ABS_START - lo, Math.min(ABS_END - hi, shift));
+
+    const fits = s => drag.group.every(m => {
+      const ns = m.s + s, ne = m.e + s;
+      const lane = events[m.k].lane_bias | 0;
+      return !events.some((o, oi) =>
+        oi !== m.k && !drag.group.some(q => q.k === oi) &&
+        (o.lane_bias | 0) === lane && intervalsOverlap(ns, ne, o.start_min, o.end_min));
+    });
+    if (!fits(shift)) shift = drag.lastGoodShift || 0;
+    drag.lastGoodShift = shift;
+
+    drag.group.forEach(m => {
+      events[m.k].start_min = m.s + shift;
+      events[m.k].end_min   = m.e + shift;
+    });
+    gridTick(drag, events[drag.i].start_min);
+    render();
+    paintMulti();
+    showBubble(`${drag.group.length} tiles · ${shift >= 0 ? '+' : ''}${shift}m`,
+               yOf(events[drag.i].start_min) - 30, events[drag.i].lane_bias | 0);
+    return;
+  }
+
   if (drag.mode === 'move'){
-    const stepLane = drag.step;
+    /* Lane follows whichever column the finger is over, so sliding sideways
+       switches lanes as soon as you cross into one. The old rule needed half
+       a lane of travel (~80px) before it reacted, which felt like nothing
+       was happening. */
+    const g = laneGeometry();
     const maxLane = Math.max(laneCount(), drag.lane0 + 1);
-    const wanted = Math.max(0, Math.min(maxLane, drag.lane0 + Math.round(dx / stepLane)));
+    const overLane = Math.floor((drag.lastClientX - canvas.getBoundingClientRect().left
+                                 - g.gutter) / (g.laneW + g.gap));
+    const wanted = Math.max(0, Math.min(maxLane, overLane));
 
     const dur = drag.e0 - drag.s0;
     let lane = ev.lane_bias|0;
@@ -2316,10 +2449,97 @@ function applyDrag(){
   }
 }
 
+/* Turn an armed hold into a real tile the finger can then drag out. */
+function beginTileCreate(){
+  if (!canvasCreate || canvasCreate.active) return;
+  canvasCreate.active = true;
+  clearMulti();
+  const startM = canvasCreate.startYMin;
+  const newTile = makeTile(startM, Math.min(dayEnd, startM + 1), 'New tile',
+                           PALETTE[events.length % PALETTE.length]);
+  newTile.lane_bias = canvasCreate.lane;
+  events.push(newTile);
+  editing = events.length - 1;
+  events[editing].end_min = clampResizeBottom(editing, events[editing].end_min);
+  canvasCreate.lastCell = null;
+  setSelection(editing);
+  render();
+  updateTileDOM(editing);
+  gdbg('hold + vertical -> new tile');
+}
+
+/* ---- marquee ---- */
+function beginMarquee(x, y){
+  canvasCreate = null;
+  clearTimeout(longPressTimer);
+  setSelection(-1);
+  const r = canvas.getBoundingClientRect();
+  marquee = { x0: x - r.left, y0: y - r.top + scrollEl.scrollTop,
+              x1: x - r.left, y1: y - r.top + scrollEl.scrollTop };
+  let box = document.getElementById('marquee');
+  if (!box){
+    box = document.createElement('div');
+    box.id = 'marquee';
+    canvas.appendChild(box);
+  }
+  box.style.display = 'block';
+  gdbg('hold + sideways -> marquee');
+}
+
+function updateMarquee(x, y){
+  if (!marquee) return;
+  const r = canvas.getBoundingClientRect();
+  marquee.x1 = x - r.left;
+  marquee.y1 = y - r.top + scrollEl.scrollTop;
+
+  const left = Math.min(marquee.x0, marquee.x1);
+  const top  = Math.min(marquee.y0, marquee.y1);
+  const w    = Math.abs(marquee.x1 - marquee.x0);
+  const h    = Math.abs(marquee.y1 - marquee.y0);
+  const box = document.getElementById('marquee');
+  if (box){
+    box.style.left = left + 'px';  box.style.top = top + 'px';
+    box.style.width = w + 'px';    box.style.height = h + 'px';
+  }
+
+  // Anything whose own rectangle overlaps the band gets picked up live.
+  const g = laneGeometry();
+  multiSel = new Set();
+  events.forEach((ev, i) => {
+    const tTop = yOf(ev.start_min);
+    const tBot = tTop + tileHeight(ev);
+    const lane = ev.lane_bias | 0;
+    const tLeft = g.gutter + lane * (g.laneW + g.gap);
+    const tRight = tLeft + g.laneW;
+    if (tBot > top && tTop < top + h && tRight > left && tLeft < left + w) multiSel.add(i);
+  });
+  paintMulti();
+  renderMultiBar();
+}
+
+function endMarquee(){
+  marquee = null;
+  const box = document.getElementById('marquee');
+  if (box) box.style.display = 'none';
+  if (multiSel.size) vibrate(14);
+  renderMultiBar();
+}
+
 function onUp(e){
   clearTimeout(tileEditTimer);
   stopAutoScroll();
   setPinching(false);
+
+  if (marquee){
+    endMarquee();
+    pendingEmptyTap = null;
+    return;
+  }
+
+  /* An armed hold that never moved still means "make a tile here". */
+  if (canvasCreate && canvasCreate.armed && !canvasCreate.active){
+    beginTileCreate();
+  }
 
   /* Decide what that press on empty space actually was. A tap only counts if
      the finger stayed put, the list did not scroll under it, and it was
@@ -2337,6 +2557,7 @@ function onUp(e){
     if (wasTap){
       if (selected !== -1) setSelection(-1);
       if (jiggleIdx !== -1) setJiggle(-1);
+      clearMulti();          // a plain tap on empty space drops the set too
     }
   }
 
@@ -3393,6 +3614,8 @@ resetRootView();
 render();
 updateNotificationBtn();
 Haptics.wire();
+document.getElementById('multibar-del').addEventListener('click', deleteMulti);
+document.getElementById('multibar-clear').addEventListener('click', clearMulti);
 
 if (!Store.persistent){
   toast('This browser will not save locally — sync is your storage here');
