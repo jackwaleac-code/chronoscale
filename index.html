@@ -427,6 +427,16 @@
     opacity:0; pointer-events:none; margin:0; z-index:-1;
   }
 
+  /* Direct-tap haptics (iOS 26.5+). A real native switch is laid invisibly
+     over the control so your finger toggles IT, which is the only thing that
+     still reaches the Taptic Engine. Do NOT add appearance:none — stripping
+     the control's native look disables the haptic. opacity:0 is fine. */
+  .haptic-tap{ display:block; position:relative; }
+  .haptic-tap > .haptic-hit{
+    position:absolute; inset:0; width:100%; height:100%;
+    margin:0; padding:0; opacity:0; z-index:5; cursor:pointer;
+  }
+
   @media (prefers-reduced-motion:reduce){*{transition:none !important;}}
 </style>
 </head>
@@ -876,12 +886,34 @@ document.getElementById('btnEnableNotifications').addEventListener('click', requ
 
 document.getElementById('buildTag').textContent = 'build ' + BUILD;
 document.getElementById('btnTestHaptic').addEventListener('click', () => {
-  Haptics.fire(18, true);
-  setTimeout(() => Haptics.fire(18, true), 160);
-  setTimeout(() => Haptics.fire(30, true), 320);
-  toast(typeof navigator.vibrate === 'function'
-    ? 'Sent three buzzes via the Vibration API'
-    : 'Sent three taps via the iOS switch trick — silent means your iOS blocks it');
+  const path = Haptics.path();
+  const v = Haptics.iosVersion;
+
+  if (path === 'vibrate'){
+    Haptics.fire(18, true);
+    setTimeout(() => Haptics.fire(18, true), 160);
+    setTimeout(() => Haptics.fire(30, true), 320);
+    toast('Three buzzes sent via the Vibration API');
+    return;
+  }
+
+  if (path === 'switch'){
+    Haptics.fire(18, true);
+    setTimeout(() => Haptics.fire(18, true), 160);
+    setTimeout(() => Haptics.fire(30, true), 320);
+    toast('Three taps via the switch trick — silent means System Haptics is off');
+    return;
+  }
+
+  if (path === 'tap-only'){
+    // The tap that opened this handler already landed on the overlay switch,
+    // so if haptics work at all you just felt one tick.
+    const ver = v ? ` (iOS ${v.major}.${v.minor})` : '';
+    toast(`Felt one tick? Buttons work${ver}. Apple blocked scripted haptics in 26.5, so gestures stay silent.`);
+    return;
+  }
+
+  toast('No haptic path on this device — Android needs Vibration API, iPhone needs iOS 17.4+');
 });
 document.getElementById('btnGestureDebug').addEventListener('click', () => {
   GDBG = !GDBG;
@@ -2232,29 +2264,104 @@ function gridTick(holder, edgeMin){
 function unarmHandles(){
   canvas.querySelectorAll('.handle.armed').forEach(h => h.classList.remove('armed'));
 }
-/* Haptics: navigator.vibrate where it exists (Android), otherwise the iOS
-   switch-toggle trick. Note Apple closed the programmatic path in iOS 26.5,
-   so on very recent iOS this may stay silent — Settings has a test button. */
+/* ============================================================
+   Haptics
+   ------------------------------------------------------------
+   Three paths, because there is no single one that works:
+
+   1. navigator.vibrate — Android only. Safari has never shipped it.
+   2. Programmatic switch toggle — iOS 17.4 to 26.4. Clicking a <label>
+      bound to <input type="checkbox" switch> made the system play a tick.
+      Apple closed this in iOS 26.5, so on current iPhones it is silent
+      and nothing in JS can bring it back.
+   3. Direct-tap overlay — still works on iOS 26.5+. An invisible native
+      switch is laid over a control so the FINGER toggles it. Only works
+      where there is a real tap on that element; it cannot be used for
+      haptics fired mid-gesture (arming a resize, snapping, etc).
+
+   So on iOS 26.5+ buttons buzz and gestures do not. That is a platform
+   limit, not a bug here.
+   ============================================================ */
 const Haptics = (() => {
   let last = 0, label = null;
+
+  const ua = navigator.userAgent || '';
+  const iosMatch = ua.match(/(?:iPhone|iPad|iPod).*?OS (\d+)[._](\d+)/);
+  const iosVer = iosMatch ? { major: +iosMatch[1], minor: +iosMatch[2] } : null;
+  const isIOS = !!iosVer ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  // iOS 26.5 is where the programmatic path was patched out.
+  const scriptPathPatched = !!iosVer &&
+    (iosVer.major > 26 || (iosVer.major === 26 && iosVer.minor >= 5));
+  const hasVibrate = typeof navigator.vibrate === 'function';
+  let switchSupported = false;
+  try { switchSupported = 'switch' in document.createElement('input'); } catch(e){}
+
   function switchPulse(){
     if (!label) label = document.getElementById('hapticLabel');
     if (!label) return false;
     try { label.click(); return true; } catch(e){ return false; }
   }
+
   return {
-    supported(){
-      return (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function')
-             || !!document.getElementById('hapticLabel');
+    iosVersion: iosVer,
+    scriptPathPatched,
+    switchSupported,
+
+    /* Which path a scripted fire() will take right now. */
+    path(){
+      if (hasVibrate) return 'vibrate';
+      if (isIOS && scriptPathPatched) return 'tap-only';
+      if (switchSupported || document.getElementById('hapticLabel')) return 'switch';
+      return 'none';
     },
+
+    supported(){ return this.path() !== 'none'; },
+
     fire(ms, force){
       const now = Date.now();
       if (!force && now - last < 28) return;   // don't machine-gun the taptic engine
       last = now;
       try {
-        if (typeof navigator.vibrate === 'function' && navigator.vibrate(ms)) return;
+        if (hasVibrate && navigator.vibrate(ms)) return;
       } catch(e){}
+      if (scriptPathPatched) return;           // silent on iOS 26.5+, by Apple's design
       switchPulse();
+    },
+
+    /* Lay an invisible native switch over an element so a real tap on it
+       fires the system tick. The click still bubbles to the element, so
+       existing handlers keep working untouched. Idempotent. */
+    attach(el){
+      if (!el || el.dataset.hapticWired === '1') return;
+      el.dataset.hapticWired = '1';
+      if (!switchSupported) return;            // nothing to gain elsewhere
+      const wrap = document.createElement('span');
+      wrap.className = 'haptic-tap';
+      el.parentNode.insertBefore(wrap, el);
+      wrap.appendChild(el);
+      const sw = document.createElement('input');
+      sw.type = 'checkbox';
+      sw.setAttribute('switch', '');
+      sw.className = 'haptic-hit';
+      sw.tabIndex = -1;
+      sw.setAttribute('aria-hidden', 'true');
+      wrap.appendChild(sw);
+
+      // The switch sits ON TOP of the control, so it eats the tap. Let the
+      // native toggle happen (that is what plays the tick) and then hand the
+      // click on to the element underneath, so its own handler still runs.
+      // No preventDefault here — cancelling the toggle cancels the haptic.
+      sw.addEventListener('click', ev => {
+        ev.stopPropagation();
+        el.click();
+      });
+    },
+
+    /* Wire every button that is a plain tap. Safe to call repeatedly. */
+    wire(root){
+      (root || document).querySelectorAll('.btn:not([data-haptic="off"])')
+        .forEach(el => Haptics.attach(el));
     }
   };
 })();
@@ -2391,6 +2498,7 @@ function setTileSheetExpanded(on){
 }
 
 function openSheet(el){
+  Haptics.wire(el);      // sheets can gain buttons after load
   scrim.classList.add('on');
   scrim.classList.toggle('light', el === sheetTile);   // keep the timeline visible
   el.classList.add('on');
@@ -3148,6 +3256,7 @@ ensureMeta();
 resetRootView();
 render();
 updateNotificationBtn();
+Haptics.wire();
 
 if (!Store.persistent){
   toast('This browser will not save locally — sync is your storage here');
