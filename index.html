@@ -122,7 +122,6 @@
     padding: 5px 8px; max-height: 100%; overflow: hidden;
     color: #ffffff; text-shadow: 0 1px 3px rgba(0,0,0,0.8);
     z-index: 2; pointer-events: none;
-    display: flex; flex-direction: column; justify-content: center;
   }
   
   @keyframes marquee {
@@ -134,7 +133,6 @@
 
   .t-sticky .t-title-wrap {
     overflow: hidden; white-space: nowrap; width: 100%; position: relative;
-    display: flex; align-items: center;
   }
   .t-sticky .t-title {
     font-weight: 750; font-size: 13px; line-height: 1.25;
@@ -149,8 +147,9 @@
   .t-sticky .t-dur{font-size:10px; opacity:.85; line-height:1.25;
                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   
-  .tile.short .t-sticky {padding-top:2px;}
-  .tile.short .t-time, .tile.short .t-dur{display:none;}
+  /* Very short tiles give the text almost the whole tile to live in.
+     Keep these paddings in sync with TILE_PAD_V / TILE_PAD_V_TIGHT in JS. */
+  .tile.tight .t-sticky {padding:1px 5px;}
   .tile .badge{position:absolute; right:5px; top:5px; background:rgba(0,0,0,.45);
                color:#fff; font-size:10px; font-weight:700; border-radius:999px;
                min-width:17px; height:17px; padding:0 5px;
@@ -1095,6 +1094,56 @@ function drawGrid(){
   }
 }
 
+/* --- tile text fitting -------------------------------------------------
+   A line of text occupies exactly font-size * line-height pixels, so we can
+   solve for the biggest font that still fits inside the tile instead of
+   guessing. Anything that cannot fit a whole line is hidden rather than
+   clipped half-way through the glyphs. */
+const TILE_LH          = 1.25;  // line-height on .t-title / .t-time / .t-dur
+const TITLE_MAX_PX     = 13;    // .t-sticky .t-title font-size
+const TITLE_MIN_PX     = 8;     // below this it is unreadable anyway
+const TIME_LINE_PX     = 10.5 * TILE_LH + 1;  // .t-time + its margin-top
+const DUR_LINE_PX      = 10   * TILE_LH;      // .t-dur
+const TILE_PAD_V       = 10;    // .t-sticky padding: 5px top + 5px bottom
+const TILE_PAD_V_TIGHT = 2;     // .tile.tight .t-sticky padding: 1px + 1px
+const TIGHT_BELOW_PX   = TITLE_MAX_PX * TILE_LH + TILE_PAD_V;  // 26.25px: below this, reclaim the padding
+
+function fitTileText(el, h){
+  const titleEl = el.querySelector('.t-title');
+  if (!titleEl) return;
+  const timeEl = el.querySelector('.t-time');
+  const durEl  = el.querySelector('.t-dur');
+
+  const tight = h < TIGHT_BELOW_PX;
+  el.classList.toggle('tight', tight);
+  let avail = h - (tight ? TILE_PAD_V_TIGHT : TILE_PAD_V);
+
+  // Title keeps its normal size while there is room, then shrinks to fit.
+  const size = Math.max(TITLE_MIN_PX, Math.min(TITLE_MAX_PX, avail / TILE_LH));
+  titleEl.style.fontSize = size.toFixed(2) + 'px';
+  avail -= size * TILE_LH;
+
+  // Time and duration only appear if a full line of each still fits.
+  const showTime = !!timeEl && avail >= TIME_LINE_PX;
+  if (timeEl) timeEl.style.display = showTime ? '' : 'none';
+  if (showTime) avail -= TIME_LINE_PX;
+
+  const showDur = !!durEl && showTime && avail >= DUR_LINE_PX;
+  if (durEl) durEl.style.display = showDur ? '' : 'none';
+
+  el.classList.toggle('short', !showTime);
+}
+
+function markTitleOverflow(titleEl, titleWrap){
+  const overflowDist = titleEl.scrollWidth - titleWrap.clientWidth;
+  if (overflowDist > 4) {
+    titleEl.style.setProperty('--scroll-dist', `-${overflowDist + 12}px`);
+    titleEl.classList.add('overflowing');
+  } else {
+    titleEl.classList.remove('overflowing');
+  }
+}
+
 function drawTiles(){
   canvas.querySelectorAll('.tile,.handle').forEach(n => n.remove());
   const { gutter, laneW, gap } = laneGeometry();
@@ -1107,7 +1156,7 @@ function drawTiles(){
     const top = yOf(ev.start_min), h = Math.max(16, (ev.end_min - ev.start_min) * pxPerMin);
     const el = document.createElement('div');
     
-    el.className = 'tile' + (i === selected ? ' sel' : '') + (h < 34 ? ' short' : '')
+    el.className = 'tile' + (i === selected ? ' sel' : '')
                  + (drag && drag.active && drag.i === i ? ' drag' : '')
                  + (isPast ? ' past' : '');
                  
@@ -1142,24 +1191,8 @@ function drawTiles(){
     t.className = 't-title'; 
     t.textContent = ev.title;
 
-    // Dynamically scale font size down when zoomed out so it fits vertically
-    const availableHeight = h - 10;
-    const targetSize = Math.min(13, Math.max(7, availableHeight * 0.75));
-    t.style.fontSize = `${targetSize}px`;
-
     titleWrap.appendChild(t);
     sticky.appendChild(titleWrap);
-
-    // Check for overflow marquee effect after DOM injection
-    requestAnimationFrame(() => {
-      const overflowDist = t.scrollWidth - titleWrap.clientWidth;
-      if (overflowDist > 4) {
-        t.style.setProperty('--scroll-dist', `-${overflowDist + 12}px`);
-        t.classList.add('overflowing');
-      } else {
-        t.classList.remove('overflowing');
-      }
-    });
 
     const time = document.createElement('div');
     time.className = 't-time mono';
@@ -1172,6 +1205,10 @@ function drawTiles(){
     sticky.appendChild(dur);
     
     el.appendChild(sticky);
+
+    // Size the text to the tile, then measure marquee overflow once laid out.
+    fitTileText(el, h);
+    requestAnimationFrame(() => markTitleOverflow(t, titleWrap));
 
     if (ev.location) {
       const mapBtn = document.createElement('a');
@@ -1259,32 +1296,18 @@ function updateTileDOM(i){
   el.style.height = h + 'px';
   el.style.left = left + 'px';
   el.style.width = laneW + 'px';
-  el.classList.toggle('short', h < 34);
-
   const titleEl = el.querySelector('.t-title');
   const titleWrap = el.querySelector('.t-title-wrap');
-  if (titleEl && titleWrap) {
-    titleEl.textContent = ev.title;
-    
-    // Dynamically scale font size down when zoomed out so it fits vertically
-    const availableHeight = h - 10;
-    const targetSize = Math.min(13, Math.max(7, availableHeight * 0.75));
-    titleEl.style.fontSize = `${targetSize}px`;
-
-    const overflowDist = titleEl.scrollWidth - titleWrap.clientWidth;
-    if (overflowDist > 4) {
-      titleEl.style.setProperty('--scroll-dist', `-${overflowDist + 12}px`);
-      titleEl.classList.add('overflowing');
-    } else {
-      titleEl.classList.remove('overflowing');
-    }
-  }
+  if (titleEl) titleEl.textContent = ev.title;
 
   const timeEl = el.querySelector('.t-time');
   if (timeEl) timeEl.textContent = `${fmt(ev.start_min)} – ${fmt(ev.end_min)}`;
 
   const durEl = el.querySelector('.t-dur');
   if (durEl) durEl.textContent = `(${fmtDur(ev.end_min - ev.start_min)})`;
+
+  fitTileText(el, h);
+  if (titleEl && titleWrap) markTitleOverflow(titleEl, titleWrap);
 
   const currentMin = nowMin();
   let overlay = el.querySelector('.tile-past-overlay');
