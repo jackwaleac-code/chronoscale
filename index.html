@@ -204,20 +204,32 @@
   }
   .tile-map-link:active { transform: scale(1.2); opacity: 1; }
   
+  /* The .handle strip only POSITIONS the grip — it catches nothing itself,
+     so dragging near a tile edge moves the tile as usual. Only .t-grip is
+     hit-testable, so a resize has to start on the visible rectangle.
+     --grip-hit is the vertical slop around the 4px bar; set it to 4px to
+     make the hitbox exactly the bar you can see. */
   .handle{
     position:absolute; left:0; right:0; height:42px; z-index:10;
     display:flex; align-items:center; justify-content:center;
-    cursor:ns-resize; touch-action:none;
+    pointer-events:none;
+    --grip-w:38px; --grip-hit:22px;
   }
-  .handle::after{
-    content:''; width:38px; height:4px; border-radius:2px;
+  .t-grip{
+    position:relative; width:var(--grip-w); height:var(--grip-hit);
+    display:flex; align-items:center; justify-content:center;
+    cursor:ns-resize; touch-action:none; pointer-events:auto;
+  }
+  .t-grip::after{
+    content:''; width:100%; height:4px; border-radius:2px;
     background:var(--text); opacity:.95;
     box-shadow:0 0 0 1px rgba(0,0,0,.5), 0 2px 6px rgba(0,0,0,.4);
   }
   .handle.top{top:-21px;} 
   .handle.bot{bottom:-21px;}
-  .handle.armed::after{
-    background:var(--accent); width:54px; height:5px;
+  .handle.armed{ --grip-w:54px; }
+  .handle.armed .t-grip::after{
+    background:var(--accent); height:5px;
     box-shadow:0 0 0 1px rgba(0,0,0,.5), 0 0 10px rgba(110,168,254,.7);
   }
 
@@ -631,10 +643,14 @@
    Chronoscale mobile
    ============================================================ */
 
-const ROOT_START = 6 * 60, ROOT_END = 22 * 60;
-const ABS_START = 6 * 60, ABS_END = 24 * 60;
+/* The visible day range is a saved preference, not a constant. ABS_* stay
+   wide open so narrowing the range can never clamp (and destroy) tiles that
+   already sit outside it — resetRootView widens the view for those instead. */
+const RANGE_DEFAULT = { start: 6 * 60, end: 22 * 60 };
+let dayRange = { ...RANGE_DEFAULT };
+const ABS_START = 0, ABS_END = 24 * 60;
 const TOP_PAD_PX = 16;
-let dayStart = ROOT_START, dayEnd = ROOT_END;
+let dayStart = dayRange.start, dayEnd = dayRange.end;
 const SNAP = 1;                       
 const MIN_DUR = 1;
 const TICK_GAP = 40;                  
@@ -727,7 +743,7 @@ function pathTitles(){ return viewStack.map(s => s.title); }
 
 function resetRootView(){
   viewStack = [];
-  let s = ROOT_START, e = ROOT_END;
+  let s = dayRange.start, e = dayRange.end;
   for (const ev of events){
     s = Math.min(s, Math.floor(ev.start_min / 60) * 60);
     e = Math.max(e, Math.ceil(ev.end_min / 60) * 60);
@@ -916,7 +932,7 @@ function laneEvents(lane, excludeIdx){
 
 function clampMoveInLane(start0, end0, delta, lane, excludeIdx){
   const dur = end0 - start0;
-  const minStart = Math.max(dayStart, 6 * 60);
+  const minStart = Math.max(dayStart, ABS_START);
   const maxStart = dayEnd - dur;
   let best = Math.max(minStart, Math.min(maxStart, start0 + delta));
 
@@ -938,7 +954,7 @@ function clampMoveInLane(start0, end0, delta, lane, excludeIdx){
 
 function clampResizeTop(idx, proposed){
   const ev = events[idx], lane = ev.lane_bias|0;
-  const minBound = Math.max(dayStart, 6 * 60);
+  const minBound = Math.max(dayStart, ABS_START);
   let s = Math.max(minBound, Math.min(proposed, ev.end_min - MIN_DUR));
   let blocker = minBound;
   for (const o of laneEvents(lane, idx))
@@ -969,13 +985,13 @@ function laneCount(){
    Model
    ============================================================ */
 function makeTile(startM, endM, title, color){
-  return { start_min:Math.max(6 * 60, startM), end_min:Math.max(Math.max(6 * 60, startM) + MIN_DUR, endM), title:title||'New tile',
+  return { start_min:Math.max(ABS_START, startM), end_min:Math.max(Math.max(ABS_START, startM) + MIN_DUR, endM), title:title||'New tile',
            color:color||PALETTE[0], recurrence:'none', lane_bias:0,
            notes:null, counter:0, children:[], task_id:null, location:null };
 }
 function normalise(raw){
   if (!raw || typeof raw !== 'object') return null;
-  const s = clampMin(Math.max(6 * 60, Number(raw.start_min) || 6 * 60));
+  const s = clampMin(Math.max(ABS_START, Number(raw.start_min) || dayRange.start));
   let e = clampMin(Number(raw.end_min) || s + 1);
   if (e <= s) e = Math.min(ABS_END, s + MIN_DUR);
   return {
@@ -1000,6 +1016,7 @@ function noteText(n){
 /* ---------- persistence ---------- */
 function save(){
   db.templates[db.current] = rootEvents();
+  db.range = { start: dayRange.start, end: dayRange.end };
   touchTemplate(db.current);
   try { Store.set(LS_KEY, JSON.stringify(db)); }
   catch (e) { toast("Couldn't save — storage is full"); }
@@ -1019,6 +1036,16 @@ function load(){
   }
   if (!db.templates || !Object.keys(db.templates).length) db.templates = { Default: [] };
   if (!db.templates[db.current]) db.current = Object.keys(db.templates)[0];
+
+  // Saved time range, if any. Guard against a corrupt or inverted pair.
+  const r = db.range;
+  if (r && Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start){
+    dayRange = { start: Math.max(ABS_START, r.start), end: Math.min(ABS_END, r.end) };
+  } else {
+    dayRange = { ...RANGE_DEFAULT };
+  }
+  dayStart = dayRange.start; dayEnd = dayRange.end;
+
   events = (db.templates[db.current] || []).map(normalise).filter(Boolean);
 }
 
@@ -1337,6 +1364,12 @@ function rebuildHandles() {
     hd.style.left  = left + 'px';
     hd.style.width = laneW + 'px';
     hd.style.top   = (side === 'top' ? top - 21 : top + h - 21) + 'px';
+    // The grip is a real element, not a pseudo-element, so it is what the
+    // pointer actually hits. closest('.handle') still resolves from it, so
+    // every resize code path below is untouched.
+    const grip = document.createElement('div');
+    grip.className = 't-grip';
+    hd.appendChild(grip);
     canvas.appendChild(hd);
   });
 }
@@ -1877,7 +1910,7 @@ function onDown(e){
     const g = laneGeometry();
     const clickedLane = Math.max(0, Math.floor((clickX - g.gutter) / (g.laneW + g.gap)));
     const step = 1;
-    const alignedStart = Math.max(6 * 60, snap(clickedMin, step));
+    const alignedStart = Math.max(dayStart, snap(clickedMin, step));
     const initDur = 1;
 
     if (jiggleIdx !== -1) setJiggle(-1);   // tap off the tile to stop shaking
@@ -2116,13 +2149,13 @@ function onMove(e){
         vibrate(12);
       }
     }
-    const ns = Math.max(6 * 60, clampMoveInLane(drag.s0, drag.e0, deltaMin, lane, drag.i));
+    const ns = Math.max(ABS_START, clampMoveInLane(drag.s0, drag.e0, deltaMin, lane, drag.i));
     ev.start_min = ns; ev.end_min = ns + dur;
     gridTick(drag, ev.start_min);
     updateTileDOM(drag.i);
     showBubble(`${fmt(ev.start_min)} – ${fmt(ev.end_min)}`, yOf(ev.start_min) - 30, ev.lane_bias|0);
   } else if (drag.mode === 'top'){
-    ev.start_min = Math.max(6 * 60, clampResizeTop(drag.i, snap(drag.s0 + deltaMin, step)));
+    ev.start_min = Math.max(ABS_START, clampResizeTop(drag.i, snap(drag.s0 + deltaMin, step)));
     gridTick(drag, ev.start_min);
     updateTileDOM(drag.i);
     showBubble(`${fmt(ev.start_min)} · ${fmtDur(ev.end_min - ev.start_min)}`, yOf(ev.start_min) - 30, ev.lane_bias|0);
@@ -2374,24 +2407,28 @@ scrim.addEventListener('click', closeSheets);
 /* ---------- settings sheet handlers ---------- */
 document.getElementById('btnSettings').addEventListener('click', () => {
   sheetList.classList.remove('on');
-  document.getElementById('fSettingStart').value = fmt24(dayStart);
-  document.getElementById('fSettingEnd').value = fmt24(dayEnd);
+  document.getElementById('fSettingStart').value = fmt24(dayRange.start);
+  document.getElementById('fSettingEnd').value = fmt24(dayRange.end);
   openSheet(sheetSettings);
 });
 
 document.getElementById('btnSaveTimeRange').addEventListener('click', () => {
-  const s = parseTime(document.getElementById('fSettingStart').value);
+  const s  = parseTime(document.getElementById('fSettingStart').value);
   const en = parseTime(document.getElementById('fSettingEnd').value);
-  if (s !== null && en !== null && en > s) {
-    dayStart = s;
-    dayEnd = en;
-    pxPerMin = fitZoom();
-    render();
-    closeSheets();
-    toast('Time range updated');
-  } else {
+  if (s === null || en === null || en <= s){
     toast('Invalid time range. End must be after start.');
+    return;
   }
+  dayRange = { start: Math.max(ABS_START, s), end: Math.min(ABS_END, en) };
+  // resetRootView starts from dayRange and widens it if any tile falls
+  // outside, so narrowing the range never hides work you already have.
+  resetRootView();
+  pxPerMin = fitZoom();
+  save();
+  render();
+  closeSheets();
+  const widened = dayStart !== dayRange.start || dayEnd !== dayRange.end;
+  toast(widened ? 'Range set — widened to fit existing tiles' : 'Time range updated');
 });
 
 document.getElementById('btnOpenAuth').addEventListener('click', () => {
@@ -2490,10 +2527,10 @@ document.getElementById('vStart').addEventListener('change', function(e) {
   const ev = events[editing];
   let m = parseTime(e.target.value);
   if (m !== null) {
-    m = Math.max(6 * 60, Math.min(ROOT_END, m));
+    m = clampMin(m);
     const dur = ev.end_min - ev.start_min;
     const delta = m - ev.start_min;
-    const ns = Math.max(6 * 60, clampMoveInLane(ev.start_min, ev.end_min, delta, ev.lane_bias|0, editing));
+    const ns = Math.max(ABS_START, clampMoveInLane(ev.start_min, ev.end_min, delta, ev.lane_bias|0, editing));
     if (ns !== m) toast('Blocked by boundary or another tile');
     ev.start_min = ns;
     ev.end_min = ns + dur;
@@ -2506,7 +2543,7 @@ document.getElementById('vEnd').addEventListener('change', function(e) {
   const ev = events[editing];
   let m = parseTime(e.target.value);
   if (m !== null) {
-    m = Math.max(6 * 60, Math.min(ROOT_END, m));
+    m = clampMin(m);
     if (m <= ev.start_min) m = ev.start_min + MIN_DUR; 
     const delta = m - ev.end_min;
     const ne = clampResizeBottom(editing, ev.end_min + delta);
@@ -2551,7 +2588,7 @@ document.querySelectorAll('[data-step]').forEach(btn => {
 
     if (kind === 'start'){
       const dur = ev.end_min - ev.start_min;
-      const ns = Math.max(6 * 60, clampMoveInLane(ev.start_min, ev.end_min, d, ev.lane_bias|0, editing));
+      const ns = Math.max(ABS_START, clampMoveInLane(ev.start_min, ev.end_min, d, ev.lane_bias|0, editing));
       if (ns === ev.start_min) return toast('Blocked by boundary or another tile');
       ev.start_min = ns; ev.end_min = ns + dur;
     } else if (kind === 'end'){
