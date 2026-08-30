@@ -63,13 +63,28 @@
   
   /* ---- minimap preview bar ---- */
   #minimap{
-    position:absolute; right:12px; bottom:12px; width:44px; height:180px;
+    position:absolute; right:12px; bottom:12px; width:58px; height:180px;
     background:rgba(29, 32, 39, 0.85); border:1px solid var(--line);
     border-radius:8px; z-index:15; overflow:hidden;
     backdrop-filter:blur(6px); box-shadow:0 4px 16px rgba(0,0,0,0.5);
     touch-action:none; display:flex; flex-direction:column;
   }
-  #minimap-track{position:relative; width:100%; height:100%; flex:1;}
+  /* Hour scale down the left edge so you can read roughly when each block is. */
+  #minimap-hours{
+    position:absolute; left:0; top:0; bottom:0; width:16px;
+    border-right:1px solid var(--line); pointer-events:none; z-index:2;
+  }
+  .mm-hour{
+    position:absolute; left:0; width:16px; text-align:center;
+    font-size:7px; font-weight:700; line-height:1;
+    color:var(--dim); transform:translateY(-50%);
+    font-family:ui-monospace,Menlo,Consolas,monospace;
+  }
+  .mm-tick{
+    position:absolute; left:16px; right:0; height:0;
+    border-top:1px solid var(--grid-minor); opacity:.5; pointer-events:none; z-index:1;
+  }
+  #minimap-track{position:relative; margin-left:16px; width:calc(100% - 16px); height:100%; flex:1;}
   .minimap-tile{position:absolute; border-radius:1px; opacity:0.65;}
   #minimap-viewport{
     position:absolute; left:0; right:0; border:1px solid var(--accent);
@@ -468,6 +483,7 @@
     </div>
   </div>
   <div id="minimap">
+    <div id="minimap-hours"></div>
     <div id="minimap-track">
       <div id="minimap-viewport"></div>
     </div>
@@ -728,9 +744,10 @@ let pxPerMin = 1.6;
 let selected = -1;
 let editing = -1;
 let lastTap = { time: 0, idx: -1, count: 0 };
-let lastEmptyTap = null;
-/* An empty-space press that has not yet proved itself a tap rather than a
-   scroll flick. Promoted to lastEmptyTap in onUp, discarded on any movement. */
+/* How long to hold on empty space before a new tile starts under the finger. */
+const CREATE_HOLD_MS = 400;
+/* An empty-space press that may turn out to be a tap (deselect), a scroll
+   flick, or a hold that creates a tile. Resolved in onUp. */
 let pendingEmptyTap = null;
 let tapActionTimer = null;
 let jiggleIdx = -1;          // tile currently shaking with a delete badge
@@ -1490,6 +1507,47 @@ function updateTileDOM(i){
   });
 }
 
+/* The minimap's hour scale. Rebuilt only when the day range or the widget
+   size actually changes — updateMinimap runs on every scroll frame. */
+let mmHoursKey = '';
+function updateMinimapHours(height){
+  const hours = document.getElementById('minimap-hours');
+  const track = document.getElementById('minimap-track');
+  if (!hours || !track) return;
+
+  const key = `${dayStart}|${dayEnd}|${Math.round(height)}`;
+  if (key === mmHoursKey) return;
+  mmHoursKey = key;
+
+  hours.innerHTML = '';
+  track.querySelectorAll('.mm-tick').forEach(n => n.remove());
+
+  const span = dayEnd - dayStart;
+  if (span <= 0 || height <= 0) return;
+
+  // Widen the gap between labels until they stop colliding at 7px type.
+  const pxPerHour = height / (span / 60);
+  const stepHours = [1, 2, 3, 4, 6, 8].find(s => s * pxPerHour >= 17) || 12;
+
+  const firstHour = Math.ceil(dayStart / 60 / stepHours) * stepHours;
+  for (let h = firstHour; h * 60 <= dayEnd; h += stepHours){
+    const y = ((h * 60 - dayStart) / span) * height;
+    if (y < 5 || y > height - 3) continue;      // don't clip against the frame
+
+    const lab = document.createElement('div');
+    lab.className = 'mm-hour';
+    lab.style.top = y + 'px';
+    const hh = h % 24;
+    lab.textContent = (hh % 12 === 0 ? 12 : hh % 12) + (hh < 12 ? 'a' : 'p');
+    hours.appendChild(lab);
+
+    const tick = document.createElement('div');
+    tick.className = 'mm-tick';
+    tick.style.top = y + 'px';
+    track.appendChild(tick);
+  }
+}
+
 function updateMinimap(){
   const track = document.getElementById('minimap-track');
   const viewport = document.getElementById('minimap-viewport');
@@ -1501,6 +1559,8 @@ function updateMinimap(){
   const totalSpan = dayEnd - dayStart;
   const minimapHeight = minimapEl.clientHeight;
   const nLanes = laneCount();
+
+  updateMinimapHours(minimapHeight);
 
   events.forEach(ev => {
     const topRatio = Math.max(0, (ev.start_min - dayStart) / totalSpan);
@@ -1620,7 +1680,6 @@ scrollEl.addEventListener('scroll', () => {
   }
   /* Scrolling proves the press was not a tap — forget it either way. */
   pendingEmptyTap = null;
-  lastEmptyTap = null;
   if (scrollRAF) return;
   scrollRAF = requestAnimationFrame(() => {
     drawGrid();
@@ -1881,6 +1940,7 @@ function startAutoScroll(speed) {
       if (canvasCreate && canvasCreate.active && canvasCreate.lastClientY !== undefined) {
         updateCreationFromPoint(canvasCreate.lastClientY);
       }
+      applyDrag();
       autoScrollRAF = requestAnimationFrame(step);
     } else {
       autoScrollRAF = null;
@@ -1968,13 +2028,7 @@ function onDown(e){
     if (jiggleIdx !== -1) setJiggle(-1);   // tap off the tile to stop shaking
 
     const now = Date.now();
-    const isSecondTap = lastEmptyTap &&
-      now - lastEmptyTap.time < 450 &&
-      Math.hypot(pt.clientX - lastEmptyTap.x, pt.clientY - lastEmptyTap.y) < 44;
-    /* Do NOT bank this press as a tap yet. A scroll flick also starts with a
-       touch on empty space, and banking it here meant two quick flicks in the
-       same spot read as a double tap and spawned a tile. onUp promotes it
-       only if the finger actually stayed put. */
+    /* Track the press so onUp can tell a tap (deselect) from a flick. */
     pendingEmptyTap = { time: now, x: pt.clientX, y: pt.clientY,
                         scroll0: scrollEl.scrollTop, maxMove: 0 };
 
@@ -1990,10 +2044,16 @@ function onDown(e){
       isTouch: e.type === 'touchstart'
     };
 
-    /* Second tap on empty space starts the tile straight away, so you can
-       keep the finger down and drag out its length. */
-    if (isSecondTap){
-      lastEmptyTap = null;
+    /* Hold on empty space to start a tile, then keep the finger down and drag
+       to set its length. Any movement or scroll before the hold completes
+       cancels it, so this never fights with scrolling. */
+    longPressTimer = setTimeout(() => {
+      if (!canvasCreate || canvasCreate.active) return;
+      if (canvasCreate.maxMove > 8) return gdbg('  create: not armed, moved');
+      if (Math.abs(scrollEl.scrollTop - canvasCreate.scroll0) > 2)
+        return gdbg('  create: not armed, list scrolled');
+
+      pendingEmptyTap = null;        // this press is a create, not a tap
       canvasCreate.active = true;
       vibrate(22);
       const startM = canvasCreate.startYMin;
@@ -2007,8 +2067,8 @@ function onDown(e){
       setSelection(editing);
       render();
       updateTileDOM(editing);
-      gdbg('double tap -> new tile');
-    }
+      gdbg('long press -> new tile');
+    }, CREATE_HOLD_MS);
     return;
   }
 
@@ -2190,16 +2250,38 @@ function onMove(e){
 
   if (e.cancelable) e.preventDefault();
 
+  /* Dragging a tile near either edge pulls the timeline along, exactly as
+     resizing does. The pointer is remembered so the auto-scroll loop can keep
+     re-applying the drag while the finger holds still. */
+  drag.lastClientX = pt.clientX;
+  drag.lastClientY = pt.clientY;
+  checkAutoScrollEdge(pt.clientY);
+
+  applyDrag();
+}
+
+/* Recompute the dragged tile from the last known pointer position. Called by
+   onMove and by the auto-scroll loop, so a held finger keeps extending or
+   moving the tile as the view scrolls. */
+function applyDrag(){
+  if (!drag || !drag.active || drag.lastClientY === undefined) return;
+  const dy = (drag.lastClientY - drag.y0);
+  const dx = (drag.lastClientX - drag.x0);
+
+  const ev = events[drag.i];
+  const step = 1;
+  /* Include how far the list has scrolled since the press. Without this the
+     tile would sit still while auto-scroll slid the timeline underneath it. */
+  const scrolled = scrollEl.scrollTop - drag.scroll0;
+
   if (!drag.moved){
-    if (Math.abs(dy) < 3 && Math.abs(dx) < 3 && drag.mode !== 'move') return;
+    if (Math.abs(dy) < 3 && Math.abs(dx) < 3 && !scrolled && drag.mode !== 'move') return;
     drag.moved = true;
     clearTimeout(tileEditTimer);
     clearTimeout(longPressTimer);
   }
 
-  const ev = events[drag.i];
-  const step = 1;
-  const deltaMin = snap(dy / pxPerMin, step);
+  const deltaMin = snap((dy + scrolled) / pxPerMin, step);
 
   if (drag.mode === 'move'){
     const stepLane = drag.step;
@@ -2253,11 +2335,8 @@ function onUp(e){
                    Math.abs(scrollEl.scrollTop - p.scroll0) <= 2 &&
                    Date.now() - p.time < 400;
     if (wasTap){
-      lastEmptyTap = { time: Date.now(), x: p.x, y: p.y };
       if (selected !== -1) setSelection(-1);
       if (jiggleIdx !== -1) setJiggle(-1);
-    } else {
-      lastEmptyTap = null;
     }
   }
 
