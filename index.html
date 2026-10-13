@@ -65,7 +65,7 @@ input[type=color]{width:52px;height:44px;padding:3px;flex:none}
 <button class="fab pri" id="bAdd">Add item</button>
 
 <input type="file" id="cam" accept="image/*" capture="environment" hidden>
-<input type="file" id="imp" accept="application/json,.json" hidden>
+<input type="file" id="imp" accept="application/json,.json,application/zip,.zip" hidden>
 <input type="file" id="imf" accept="image/*" webkitdirectory multiple hidden>
 
 <div class="ov" id="sheet" hidden>
@@ -96,9 +96,9 @@ input[type=color]{width:52px;height:44px;padding:3px;flex:none}
 <div class="ov" id="imv" hidden>
   <div class="card">
     <strong>Import</strong>
-    <div class="hint">Choose the inventory JSON file, then the folder with the pictures. Pictures are matched by item id.</div>
-    <button id="pj">1. Choose JSON file</button><div class="hint" id="pjn"></div>
-    <button id="pf">2. Choose pictures folder</button><div class="hint" id="pfn"></div>
+    <div class="hint">Choose the saved .zip file and you are done. Or choose the JSON file plus the folder of pictures (matched by item id).</div>
+    <button id="pj">1. Choose zip or JSON file</button><div class="hint" id="pjn"></div>
+    <button id="pf">2. Pictures folder (not needed for a zip)</button><div class="hint" id="pfn"></div>
     <div class="row"><button id="icancel" style="margin-left:auto">Cancel</button><button class="pri" id="igo">Import</button></div>
   </div>
 </div>
@@ -287,12 +287,41 @@ let impJson=null,impFiles=[];
 $('#bImport').onclick=()=>{impJson=null;impFiles=[];$('#pjn').textContent='No file chosen';$('#pfn').textContent='No folder chosen (pictures will be skipped)';$('#imv').hidden=false};
 $('#pj').onclick=()=>{$('#imp').value='';$('#imp').click()};
 $('#pf').onclick=()=>{$('#imf').value='';$('#imf').click()};
+async function readZip(file){
+  const buf=await file.arrayBuffer(),dv=new DataView(buf),u8=new Uint8Array(buf);
+  let e=buf.byteLength-22;while(e>=0&&dv.getUint32(e,true)!==0x06054b50)e--;
+  if(e<0)throw new Error('not a zip');
+  const n=dv.getUint16(e+10,true);let p=dv.getUint32(e+16,true);const out=[];
+  for(let i=0;i<n;i++){
+    if(dv.getUint32(p,true)!==0x02014b50)break;
+    const method=dv.getUint16(p+10,true),csz=dv.getUint32(p+20,true),nl=dv.getUint16(p+28,true),xl=dv.getUint16(p+30,true),cl=dv.getUint16(p+32,true),lo=dv.getUint32(p+42,true);
+    const name=new TextDecoder().decode(u8.subarray(p+46,p+46+nl));
+    p+=46+nl+xl+cl;
+    if(name.endsWith('/')||name.startsWith('__MACOSX')||name.split('/').pop().startsWith('.'))continue;
+    const ds=lo+30+dv.getUint16(lo+26,true)+dv.getUint16(lo+28,true);
+    let data=u8.subarray(ds,ds+csz);
+    if(method===8)data=new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+    else if(method!==0)continue;
+    out.push({name,data});
+  }
+  return out;
+}
 $('#imp').onchange=e=>{impJson=e.target.files[0]||null;$('#pjn').textContent=impJson?impJson.name:'No file chosen'};
 $('#imf').onchange=e=>{impFiles=[...e.target.files].filter(f=>/^image\//.test(f.type)||/\.(jpe?g|png|webp|heic)$/i.test(f.name));$('#pfn').textContent=impFiles.length+' pictures found'};
 $('#icancel').onclick=()=>{$('#imv').hidden=true};
 $('#igo').onclick=async()=>{
   if(!impJson){alert('Choose the JSON file first.');return}
-  let d;try{d=JSON.parse(await impJson.text())}catch(err){alert('That file is not valid JSON.');return}
+  let d,pics=impFiles;
+  try{
+    if(/\.zip$/i.test(impJson.name)||impJson.type==='application/zip'){
+      const ent=await readZip(impJson);
+      const j=ent.find(x=>/(^|\/)inventory\.json$/i.test(x.name))||ent.find(x=>/\.json$/i.test(x.name));
+      if(!j){alert('No inventory.json found inside that zip.');return}
+      d=JSON.parse(new TextDecoder().decode(j.data));
+      const mt={png:'image/png',webp:'image/webp',heic:'image/heic'};
+      pics=[...impFiles,...ent.filter(x=>/\.(jpe?g|png|webp|heic)$/i.test(x.name)).map(x=>new File([x.data],x.name,{type:mt[x.name.split('.').pop().toLowerCase()]||'image/jpeg'}))];
+    }else d=JSON.parse(await impJson.text());
+  }catch(err){alert('Could not read that file. Make sure it is the saved zip or a valid JSON.');return}
   if(!d||!Array.isArray(d.items)){alert('This file does not look like an inventory export.');return}
   const clean={categories:(d.categories||[]).filter(c=>c&&c.id&&c.name),tags:(d.tags||[]).filter(t=>t&&t.id&&t.name&&/^#[0-9a-f]{6}$/i.test(t.color)),
     items:d.items.filter(i=>i&&i.id&&i.name).map(i=>({id:String(i.id),name:String(i.name),cat:i.cat||'',tags:Array.isArray(i.tags)?i.tags:[],qty:Number.isFinite(+i.qty)&&+i.qty>=0?Math.floor(+i.qty):1,created:i.created||Date.now(),_img:i.image||''}))};
@@ -302,7 +331,7 @@ $('#igo').onclick=async()=>{
     clean.items.forEach(({_img,...x})=>{const j=S.items.findIndex(y=>y.id===x.id);j<0?S.items.push(x):S.items[j]=x});
   }
   const base=n=>n.split('/').pop().replace(/\.[^.]+$/,'');
-  const byId={};impFiles.forEach(f=>{byId[base(f.name)]=f});
+  const byId={};pics.forEach(f=>{byId[base(f.name)]=f});
   let n=0;
   for(const it of clean.items){
     const f=byId[it.id]||(it._img&&byId[base(it._img)]);
