@@ -41,6 +41,12 @@ input,select{border:1px solid var(--line);background:var(--panel);border-radius:
 input[type=color]{width:52px;height:44px;padding:3px;flex:none}
 .mrow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
 .hint{color:var(--mute);font-size:13px}
+.info{flex:1;min-width:0}
+.stp{display:flex;align-items:center;gap:6px;flex:none}
+.stp button{width:36px;height:36px;padding:0;font-size:20px;line-height:1}
+.stp span{min-width:26px;text-align:center;font-weight:600}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom));background:var(--ink);color:var(--bg);padding:6px 14px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:20}
+.toast.on{opacity:1}
 </style>
 </head>
 <body>
@@ -60,6 +66,7 @@ input[type=color]{width:52px;height:44px;padding:3px;flex:none}
 
 <button class="fab pri" id="bAdd">Add item</button>
 
+<div class="toast" id="toast" role="status"></div>
 <input type="file" id="cam" accept="image/*" capture="environment" hidden>
 <input type="file" id="imp" accept="application/json,.json" hidden>
 
@@ -69,6 +76,8 @@ input[type=color]{width:52px;height:44px;padding:3px;flex:none}
     <div class="hint">Tap the photo to retake it.</div>
     <label for="nm">Name</label>
     <input id="nm" placeholder="e.g. Winter jacket" autocomplete="off">
+    <label for="qn">Quantity</label>
+    <div class="row"><button id="qm" aria-label="Decrease">&minus;</button><input id="qn" type="number" inputmode="numeric" min="0" value="1" style="text-align:center;width:90px"><button id="qp" aria-label="Increase">+</button></div>
     <label for="cs">Category</label>
     <div class="row"><select id="cs"></select><button id="ncat">New</button></div>
     <label>Tags</label>
@@ -93,6 +102,8 @@ input[type=color]{width:52px;height:44px;padding:3px;flex:none}
     <div class="row"><input id="mcn" placeholder="New category"><button id="mca">Add</button></div>
     <strong>Tags</strong>
     <div id="mTags"></div>
+    <label class="row" style="font-size:15px;color:var(--ink)"><input type="checkbox" id="mbk" style="width:auto"> Also download a JSON backup file each time I add an item</label>
+    <div class="hint">Your inventory already saves on this phone automatically.</div>
     <button class="pri" id="mClose">Done</button>
   </div>
 </div>
@@ -103,7 +114,8 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 const uid=()=>Math.random().toString(36).slice(2,9)+Date.now().toString(36);
 let S={categories:[],tags:[],items:[]};
 try{const d=JSON.parse(localStorage.getItem('inv')||'null');if(d)S=Object.assign(S,d)}catch(e){}
-const save=()=>{try{localStorage.setItem('inv',JSON.stringify(S))}catch(e){alert('Could not save data on this device.')}};
+let tt;function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('on'),1200)}
+const save=()=>{try{localStorage.setItem('inv',JSON.stringify(S));toast('Saved')}catch(e){alert('Could not save data on this device.')}};
 const IMG={};           // id -> dataURL (kept out of the JSON export)
 let db=null,F={cat:'',tags:[]},D=null,camMode='new';
 
@@ -133,13 +145,17 @@ function render(){
   $('#count').textContent=items.length+' of '+S.items.length+' items';
   $('#list').innerHTML=items.length?items.map(i=>`<div class="item" data-id="${i.id}">
     ${IMG[i.id]?`<img class="thumb" src="${IMG[i.id]}" alt="">`:'<div class="thumb">No photo</div>'}
-    <div><h3>${esc(i.name)}</h3><div class="cat">${catById(i.cat)?esc(catById(i.cat).name):'Uncategorized'}</div>
-    <div class="chips">${i.tags.map(tagById).filter(Boolean).map(t=>chip(t,'sm')).join('')}</div></div></div>`).join('')
+    <div class="info"><h3>${esc(i.name)}</h3><div class="cat">${catById(i.cat)?esc(catById(i.cat).name):'Uncategorized'}</div>
+    <div class="chips">${i.tags.map(tagById).filter(Boolean).map(t=>chip(t,'sm')).join('')}</div></div>
+    <div class="stp"><button data-d="-1" data-i="${i.id}" aria-label="Decrease quantity">&minus;</button><span>${i.qty??1}</span><button data-d="1" data-i="${i.id}" aria-label="Increase quantity">+</button></div></div>`).join('')
     :`<div class="empty">${S.items.length?'No items match these filters.':'Nothing here yet. Tap Add item and take a photo.'}</div>`;
 }
 $('#fCat').onchange=e=>{F.cat=e.target.value;render()};
 $('#fTags').onclick=e=>{const c=e.target.closest('.chip');if(!c)return;const id=c.dataset.id;F.tags=F.tags.includes(id)?F.tags.filter(x=>x!==id):[...F.tags,id];render()};
-$('#list').onclick=e=>{const el=e.target.closest('.item');if(el)openSheet(S.items.find(i=>i.id===el.dataset.id))};
+$('#list').onclick=e=>{
+  const b=e.target.closest('[data-d]');
+  if(b){const it=S.items.find(i=>i.id===b.dataset.i);if(it){it.qty=Math.max(0,(it.qty??1)+Number(b.dataset.d));save();render()}return}
+  const el=e.target.closest('.item');if(el)openSheet(S.items.find(i=>i.id===el.dataset.id))};
 
 /* ---------- add / edit sheet ---------- */
 $('#bAdd').onclick=()=>{camMode='new';$('#cam').value='';$('#cam').click()};
@@ -150,15 +166,18 @@ $('#cam').onchange=async e=>{
   if(camMode==='new'){openSheet(null,img)}else{D.img=img;$('#pv').src=img}
 };
 function openSheet(item,img){
-  D=item?{id:item.id,name:item.name,cat:item.cat||'',tags:[...item.tags],img:IMG[item.id]||null,isNew:false}
-        :{id:uid(),name:'',cat:F.cat&&F.cat!=='_none'?F.cat:'',tags:[...F.tags],img:img,isNew:true};
-  $('#nm').value=D.name;$('#pv').src=D.img||'';$('#del').style.visibility=item?'visible':'hidden';
+  D=item?{id:item.id,name:item.name,cat:item.cat||'',tags:[...item.tags],qty:item.qty??1,img:IMG[item.id]||null,isNew:false}
+        :{id:uid(),name:'',cat:F.cat&&F.cat!=='_none'?F.cat:'',tags:[...F.tags],qty:1,img:img,isNew:true};
+  $('#nm').value=D.name;$('#qn').value=D.qty;$('#pv').src=D.img||'';$('#del').style.visibility=item?'visible':'hidden';
   fillCats();fillTags();$('#sheet').hidden=false;
   if(!item)setTimeout(()=>$('#nm').focus(),50);
 }
 function fillCats(){$('#cs').innerHTML='<option value="">Uncategorized</option>'+S.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');$('#cs').value=D.cat}
 function fillTags(){$('#tg').innerHTML=S.tags.length?S.tags.map(t=>chip(t,'',!D.tags.includes(t.id))).join(''):'<span class="hint">No tags yet. Create one below.</span>'}
 $('#cs').onchange=e=>D.cat=e.target.value;
+const qSet=n=>{$('#qn').value=Math.max(0,n)};
+$('#qm').onclick=()=>qSet((parseInt($('#qn').value)||0)-1);
+$('#qp').onclick=()=>qSet((parseInt($('#qn').value)||0)+1);
 $('#tg').onclick=e=>{const c=e.target.closest('.chip');if(!c)return;const id=c.dataset.id;D.tags=D.tags.includes(id)?D.tags.filter(x=>x!==id):[...D.tags,id];fillTags()};
 $('#ncat').onclick=()=>{const n=(prompt('New category name')||'').trim();if(!n)return;const c={id:uid(),name:n};S.categories.push(c);D.cat=c.id;fillCats();save()};
 $('#ta').onclick=()=>{
@@ -174,7 +193,9 @@ $('#ok').onclick=async()=>{
   if(!name){$('#nm').focus();return}
   let it=S.items.find(i=>i.id===D.id);
   if(!it){it={id:D.id,created:Date.now()};S.items.push(it)}
-  Object.assign(it,{name,cat:D.cat,tags:D.tags});
+  let q=parseInt($('#qn').value);if(isNaN(q)||q<0)q=1;
+  Object.assign(it,{name,cat:D.cat,tags:D.tags,qty:q});
+  if(D.isNew&&localStorage.getItem('inv_bk')==='1')setTimeout(backup,150);
   if(D.img&&IMG[it.id]!==D.img){IMG[it.id]=D.img;await imgPut(it.id,D.img)}
   save();$('#sheet').hidden=true;D=null;render();
 };
@@ -199,26 +220,30 @@ $('#manage').onclick=e=>{
 };
 
 /* ---------- JSON export / import (no images) ---------- */
-$('#bExport').onclick=()=>{
+function backup(){
   const data={version:1,exported:new Date().toISOString(),categories:S.categories,tags:S.tags,items:S.items};
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
   a.download='inventory-'+new Date().toISOString().slice(0,10)+'.json';
   document.body.appendChild(a);a.click();a.remove();
-};
+}
+$('#bExport').onclick=backup;
+$('#mbk').checked=localStorage.getItem('inv_bk')==='1';
+$('#mbk').onchange=e=>localStorage.setItem('inv_bk',e.target.checked?'1':'0');
 $('#bImport').onclick=()=>{$('#imp').value='';$('#imp').click()};
 $('#imp').onchange=async e=>{
   const f=e.target.files[0];if(!f)return;
   let d;try{d=JSON.parse(await f.text())}catch(err){alert('That file is not valid JSON.');return}
   if(!d||!Array.isArray(d.items)){alert('This file does not look like an inventory export.');return}
   const clean={categories:(d.categories||[]).filter(c=>c&&c.id&&c.name),tags:(d.tags||[]).filter(t=>t&&t.id&&t.name&&/^#[0-9a-f]{6}$/i.test(t.color)),
-    items:d.items.filter(i=>i&&i.id&&i.name).map(i=>({id:String(i.id),name:String(i.name),cat:i.cat||'',tags:Array.isArray(i.tags)?i.tags:[],created:i.created||Date.now()}))};
+    items:d.items.filter(i=>i&&i.id&&i.name).map(i=>({id:String(i.id),name:String(i.name),cat:i.cat||'',tags:Array.isArray(i.tags)?i.tags:[],qty:Number.isFinite(+i.qty)&&+i.qty>=0?Math.floor(+i.qty):1,created:i.created||Date.now()}))};
   if(confirm('Replace your current inventory with this file?\n\nOK = replace everything\nCancel = merge it into what you have')){S=clean}
   else{for(const k of['categories','tags','items']){clean[k].forEach(x=>{const j=S[k].findIndex(y=>y.id===x.id);j<0?S[k].push(x):S[k][j]=x})}}
   save();render();
 };
 
 /* ---------- start ---------- */
+try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
 openDB().then(imgAll).then(render);
 render();
 </script>
