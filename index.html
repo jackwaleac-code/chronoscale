@@ -9,7 +9,7 @@
 @media(prefers-color-scheme:dark){:root{--bg:#121816;--panel:#1b2421;--ink:#e8efed;--mute:#97a8a3;--line:#2c3935;--acc:#2dd4bf;--accfg:#06201c;--danger:#f97066}}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-body{padding:env(safe-area-inset-top) 0 calc(96px + env(safe-area-inset-bottom))}
+body{padding:env(safe-area-inset-top) 0 calc(130px + env(safe-area-inset-bottom))}
 header{display:flex;align-items:center;gap:8px;padding:14px 16px 6px}
 h1{font-size:22px;margin:0 auto 0 0;letter-spacing:-.01em}
 button,select,input{font:inherit;color:inherit}
@@ -30,7 +30,7 @@ input,select{border:1px solid var(--line);background:var(--panel);border-radius:
 .item h3{margin:0 0 2px;font-size:17px}
 .item .cat{color:var(--mute);font-size:13px;margin-bottom:5px}
 .empty{color:var(--mute);text-align:center;padding:48px 24px}
-.fab{position:fixed;left:16px;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));padding:15px;font-size:17px;border-radius:14px;box-shadow:0 4px 18px rgba(0,0,0,.25)}
+.fab{position:fixed;left:14px;right:14px;bottom:calc(14px + env(safe-area-inset-bottom));min-height:84px;padding:24px;font-size:28px;font-weight:700;border-radius:22px;box-shadow:0 6px 24px rgba(0,0,0,.3)}
 .ov{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center;z-index:10}
 .ov[hidden]{display:none}
 .card{background:var(--bg);width:100%;max-width:560px;max-height:92%;overflow:auto;border-radius:18px 18px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:10px}
@@ -45,7 +45,7 @@ input[type=color]{width:52px;height:44px;padding:3px;flex:none}
 .stp{display:flex;align-items:center;gap:6px;flex:none}
 .stp button{width:36px;height:36px;padding:0;font-size:20px;line-height:1}
 .stp span{min-width:26px;text-align:center;font-weight:600}
-.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom));background:var(--ink);color:var(--bg);padding:6px 14px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:20}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(116px + env(safe-area-inset-bottom));background:var(--ink);color:var(--bg);padding:6px 14px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:20}
 .toast.on{opacity:1}
 </style>
 </head>
@@ -73,7 +73,7 @@ input[type=color]{width:52px;height:44px;padding:3px;flex:none}
 <div class="ov" id="sheet" hidden>
   <div class="card">
     <img class="pv" id="pv" alt="Item photo. Tap to retake.">
-    <div class="hint">Tap the photo to retake it.</div>
+    <div class="hint" id="pvh">Tap the photo to retake it.</div>
     <label for="nm">Name</label>
     <input id="nm" placeholder="e.g. Winter Jacket" autocomplete="off" autocapitalize="words" enterkeyhint="done">
     <label for="qn">Quantity</label>
@@ -159,21 +159,21 @@ $('#list').onclick=e=>{
   const el=e.target.closest('.item');if(el)openSheet(S.items.find(i=>i.id===el.dataset.id))};
 
 /* ---------- add / edit sheet ---------- */
-$('#bAdd').onclick=()=>{camMode='new';$('#cam').value='';$('#cam').click()};
-$('#pv').onclick=()=>{camMode='retake';$('#cam').value='';$('#cam').click()};
+function pickFile(){$('#cam').value='';$('#cam').click()}
+// Add item: open the naming sheet first (a real tap, so iOS opens the keyboard)
+$('#bAdd').onclick=()=>openSheet(null);
+$('#pv').onclick=()=>{camMode='retake';pickFile()};
 $('#cam').onchange=async e=>{
-  const f=e.target.files[0];if(!f)return;
-  // open the sheet and focus the name field right away (inside the user gesture) so iOS shows the keyboard
-  if(camMode==='new')openSheet(null,null);
-  const d=D,p=shrink(f);d.pending=p;
-  const img=await p;d.pending=null;
-  if(!img){alert('That photo could not be read. Try again.');if(D===d&&d.isNew){$('#sheet').hidden=true;D=null}return}
-  d.img=img;if(D===d)$('#pv').src=img;
+  const f=e.target.files[0];if(!f||!D)return;
+  const img=await shrink(f);
+  if(!img){alert('That photo could not be read. Try again.');return}
+  D.img=img;
+  if(camMode==='new')await commit();else $('#pv').src=img;
 };
-function openSheet(item,img){
+function openSheet(item){
   D=item?{id:item.id,name:item.name,cat:item.cat||'',tags:[...item.tags],qty:item.qty??1,img:IMG[item.id]||null,isNew:false}
-        :{id:uid(),name:'',cat:F.cat&&F.cat!=='_none'?F.cat:'',tags:[...F.tags],qty:1,img:img,isNew:true};
-  $('#nm').value=D.name;$('#qn').value=D.qty;$('#pv').src=D.img||'';$('#del').style.visibility=item?'visible':'hidden';
+        :{id:uid(),name:'',cat:F.cat&&F.cat!=='_none'?F.cat:'',tags:[...F.tags],qty:1,img:null,isNew:true};
+  $('#nm').value=D.name;$('#qn').value=D.qty;$('#pv').src=D.img||'';$('#del').style.visibility=item?'visible':'hidden';$('#pv').style.display=$('#pvh').style.display=D.img?'':'none';$('#ok').textContent=item?'Save':'Take photo';
   fillCats();fillTags();$('#sheet').hidden=false;
   if(!item){$('#nm').focus();setTimeout(()=>$('#nm').focus(),60)}
 }
@@ -199,10 +199,9 @@ $('#nm').addEventListener('keydown',e=>{
   $('#nm').blur();$('#ok').click();
 });
 $('#cancel').onclick=()=>{$('#sheet').hidden=true;D=null};
-$('#ok').onclick=async()=>{
+async function commit(){
   const name=cap($('#nm').value.trim());
   if(!name){$('#nm').focus();return}
-  if(D.pending)await D.pending;
   let it=S.items.find(i=>i.id===D.id);
   if(!it){it={id:D.id,created:Date.now()};S.items.push(it)}
   let q=parseInt($('#qn').value);if(isNaN(q)||q<0)q=1;
@@ -210,6 +209,11 @@ $('#ok').onclick=async()=>{
   if(D.isNew&&localStorage.getItem('inv_bk')==='1')setTimeout(backup,150);
   if(D.img&&IMG[it.id]!==D.img){IMG[it.id]=D.img;await imgPut(it.id,D.img)}
   save();$('#sheet').hidden=true;D=null;render();
+}
+// new item: opening the camera must happen directly inside the tap/Enter, so it is not awaited
+$('#ok').onclick=()=>{
+  if(!$('#nm').value.trim()){$('#nm').focus();return}
+  if(D.isNew){camMode='new';pickFile()}else commit();
 };
 $('#del').onclick=async()=>{
   if(!confirm('Delete this item?'))return;
