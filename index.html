@@ -45,15 +45,13 @@ input[type=color]{width:52px;height:44px;padding:3px;flex:none}
 .stp{display:flex;align-items:center;gap:6px;flex:none}
 .stp button{width:36px;height:36px;padding:0;font-size:20px;line-height:1}
 .stp span{min-width:26px;text-align:center;font-weight:600}
-.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(116px + env(safe-area-inset-bottom));background:var(--ink);color:var(--bg);padding:6px 14px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:20}
-.toast.on{opacity:1}
 </style>
 </head>
 <body>
 <header>
   <h1>Inventory</h1>
   <button id="bManage">Manage</button>
-  <button id="bExport">Export</button>
+  <button id="bExport">Save</button>
   <button id="bImport">Import</button>
 </header>
 
@@ -66,9 +64,9 @@ input[type=color]{width:52px;height:44px;padding:3px;flex:none}
 
 <button class="fab pri" id="bAdd">Add item</button>
 
-<div class="toast" id="toast" role="status"></div>
 <input type="file" id="cam" accept="image/*" capture="environment" hidden>
 <input type="file" id="imp" accept="application/json,.json" hidden>
+<input type="file" id="imf" accept="image/*" webkitdirectory multiple hidden>
 
 <div class="ov" id="sheet" hidden>
   <div class="card">
@@ -95,6 +93,16 @@ input[type=color]{width:52px;height:44px;padding:3px;flex:none}
   </div>
 </div>
 
+<div class="ov" id="imv" hidden>
+  <div class="card">
+    <strong>Import</strong>
+    <div class="hint">Choose the inventory JSON file, then the folder with the pictures. Pictures are matched by item id.</div>
+    <button id="pj">1. Choose JSON file</button><div class="hint" id="pjn"></div>
+    <button id="pf">2. Choose pictures folder</button><div class="hint" id="pfn"></div>
+    <div class="row"><button id="icancel" style="margin-left:auto">Cancel</button><button class="pri" id="igo">Import</button></div>
+  </div>
+</div>
+
 <div class="ov" id="manage" hidden>
   <div class="card">
     <strong>Categories</strong>
@@ -102,8 +110,6 @@ input[type=color]{width:52px;height:44px;padding:3px;flex:none}
     <div class="row"><input id="mcn" placeholder="New category"><button id="mca">Add</button></div>
     <strong>Tags</strong>
     <div id="mTags"></div>
-    <label class="row" style="font-size:15px;color:var(--ink)"><input type="checkbox" id="mbk" style="width:auto"> Also download a JSON backup file each time I add an item</label>
-    <div class="hint">Your inventory already saves on this phone automatically.</div>
     <button class="pri" id="mClose">Done</button>
   </div>
 </div>
@@ -114,8 +120,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 const uid=()=>Math.random().toString(36).slice(2,9)+Date.now().toString(36);
 let S={categories:[],tags:[],items:[]};
 try{const d=JSON.parse(localStorage.getItem('inv')||'null');if(d)S=Object.assign(S,d)}catch(e){}
-let tt;function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('on'),1200)}
-const save=()=>{try{localStorage.setItem('inv',JSON.stringify(S));toast('Saved')}catch(e){alert('Could not save data on this device.')}};
+const save=()=>{try{localStorage.setItem('inv',JSON.stringify(S))}catch(e){alert('Could not save data on this device.')}};
 const IMG={};           // id -> dataURL (kept out of the JSON export)
 let db=null,F={cat:'',tags:[]},D=null,camMode='new';
 
@@ -206,7 +211,6 @@ async function commit(){
   if(!it){it={id:D.id,created:Date.now()};S.items.push(it)}
   let q=parseInt($('#qn').value);if(isNaN(q)||q<0)q=1;
   Object.assign(it,{name,cat:D.cat,tags:D.tags,qty:q});
-  if(D.isNew&&localStorage.getItem('inv_bk')==='1')setTimeout(backup,150);
   if(D.img&&IMG[it.id]!==D.img){IMG[it.id]=D.img;await imgPut(it.id,D.img)}
   save();$('#sheet').hidden=true;D=null;render();
 }
@@ -235,27 +239,77 @@ $('#manage').onclick=e=>{
   if(t&&confirm('Delete this tag? It is removed from all items.')){S.tags=S.tags.filter(x=>x.id!==t);S.items.forEach(i=>i.tags=i.tags.filter(x=>x!==t));save();renderManage()}
 };
 
-/* ---------- JSON export / import (no images) ---------- */
-function backup(){
-  const data={version:1,exported:new Date().toISOString(),categories:S.categories,tags:S.tags,items:S.items};
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
-  a.download='inventory-'+new Date().toISOString().slice(0,10)+'.json';
+/* ---------- Save (zip: inventory.json + pictures/<id>.jpg) ---------- */
+const crcT=(()=>{const t=[];for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
+const crc32=b=>{let c=-1;for(let i=0;i<b.length;i++)c=crcT[(c^b[i])&255]^(c>>>8);return (c^-1)>>>0};
+function makeZip(files){
+  const enc=new TextEncoder(),parts=[],cen=[];let off=0;
+  const d=new Date(),dt=(d.getHours()<<11)|(d.getMinutes()<<5)|(d.getSeconds()>>1),dd=((d.getFullYear()-1980)<<9)|((d.getMonth()+1)<<5)|d.getDate();
+  for(const f of files){
+    const nm=enc.encode(f.name),crc=crc32(f.data),sz=f.data.length;
+    const h=new DataView(new ArrayBuffer(30));
+    h.setUint32(0,0x04034b50,true);h.setUint16(4,20,true);h.setUint16(6,0x0800,true);h.setUint16(10,dt,true);h.setUint16(12,dd,true);
+    h.setUint32(14,crc,true);h.setUint32(18,sz,true);h.setUint32(22,sz,true);h.setUint16(26,nm.length,true);
+    parts.push(new Uint8Array(h.buffer),nm,f.data);
+    const c=new DataView(new ArrayBuffer(46));
+    c.setUint32(0,0x02014b50,true);c.setUint16(4,20,true);c.setUint16(6,20,true);c.setUint16(8,0x0800,true);c.setUint16(12,dt,true);c.setUint16(14,dd,true);
+    c.setUint32(16,crc,true);c.setUint32(20,sz,true);c.setUint32(24,sz,true);c.setUint16(28,nm.length,true);c.setUint32(42,off,true);
+    cen.push(new Uint8Array(c.buffer),nm);
+    off+=30+nm.length+sz;
+  }
+  let cs=0;cen.forEach(x=>cs+=x.length);
+  const e=new DataView(new ArrayBuffer(22));
+  e.setUint32(0,0x06054b50,true);e.setUint16(8,files.length,true);e.setUint16(10,files.length,true);e.setUint32(12,cs,true);e.setUint32(16,off,true);
+  return new Blob([...parts,...cen,new Uint8Array(e.buffer)],{type:'application/zip'});
+}
+const dataBytes=u=>{const b=atob(u.split(',')[1]),a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return a};
+async function saveAll(){
+  const items=S.items.map(i=>IMG[i.id]?{...i,image:'pictures/'+i.id+'.jpg'}:{...i});
+  const data={version:2,exported:new Date().toISOString(),categories:S.categories,tags:S.tags,items};
+  const files=[{name:'inventory.json',data:new TextEncoder().encode(JSON.stringify(data,null,2))}];
+  S.items.forEach(i=>{if(IMG[i.id])files.push({name:'pictures/'+i.id+'.jpg',data:dataBytes(IMG[i.id])})});
+  const blob=makeZip(files),name='inventory-'+new Date().toISOString().slice(0,10)+'.zip';
+  if(window.showSaveFilePicker){
+    try{const h=await showSaveFilePicker({suggestedName:name,types:[{description:'Zip file',accept:{'application/zip':['.zip']}}]});const w=await h.createWritable();await w.write(blob);await w.close();return}
+    catch(e){if(e.name==='AbortError')return}
+  }
+  const file=new File([blob],name,{type:'application/zip'});
+  if(navigator.canShare&&navigator.canShare({files:[file]})){
+    try{await navigator.share({files:[file]});return}catch(e){if(e.name==='AbortError')return}
+  }
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;
   document.body.appendChild(a);a.click();a.remove();
 }
-$('#bExport').onclick=backup;
-$('#mbk').checked=localStorage.getItem('inv_bk')==='1';
-$('#mbk').onchange=e=>localStorage.setItem('inv_bk',e.target.checked?'1':'0');
-$('#bImport').onclick=()=>{$('#imp').value='';$('#imp').click()};
-$('#imp').onchange=async e=>{
-  const f=e.target.files[0];if(!f)return;
-  let d;try{d=JSON.parse(await f.text())}catch(err){alert('That file is not valid JSON.');return}
+$('#bExport').onclick=saveAll;
+
+/* ---------- Import (JSON file + pictures folder) ---------- */
+let impJson=null,impFiles=[];
+$('#bImport').onclick=()=>{impJson=null;impFiles=[];$('#pjn').textContent='No file chosen';$('#pfn').textContent='No folder chosen (pictures will be skipped)';$('#imv').hidden=false};
+$('#pj').onclick=()=>{$('#imp').value='';$('#imp').click()};
+$('#pf').onclick=()=>{$('#imf').value='';$('#imf').click()};
+$('#imp').onchange=e=>{impJson=e.target.files[0]||null;$('#pjn').textContent=impJson?impJson.name:'No file chosen'};
+$('#imf').onchange=e=>{impFiles=[...e.target.files].filter(f=>/^image\//.test(f.type)||/\.(jpe?g|png|webp|heic)$/i.test(f.name));$('#pfn').textContent=impFiles.length+' pictures found'};
+$('#icancel').onclick=()=>{$('#imv').hidden=true};
+$('#igo').onclick=async()=>{
+  if(!impJson){alert('Choose the JSON file first.');return}
+  let d;try{d=JSON.parse(await impJson.text())}catch(err){alert('That file is not valid JSON.');return}
   if(!d||!Array.isArray(d.items)){alert('This file does not look like an inventory export.');return}
   const clean={categories:(d.categories||[]).filter(c=>c&&c.id&&c.name),tags:(d.tags||[]).filter(t=>t&&t.id&&t.name&&/^#[0-9a-f]{6}$/i.test(t.color)),
-    items:d.items.filter(i=>i&&i.id&&i.name).map(i=>({id:String(i.id),name:String(i.name),cat:i.cat||'',tags:Array.isArray(i.tags)?i.tags:[],qty:Number.isFinite(+i.qty)&&+i.qty>=0?Math.floor(+i.qty):1,created:i.created||Date.now()}))};
-  if(confirm('Replace your current inventory with this file?\n\nOK = replace everything\nCancel = merge it into what you have')){S=clean}
-  else{for(const k of['categories','tags','items']){clean[k].forEach(x=>{const j=S[k].findIndex(y=>y.id===x.id);j<0?S[k].push(x):S[k][j]=x})}}
-  save();render();
+    items:d.items.filter(i=>i&&i.id&&i.name).map(i=>({id:String(i.id),name:String(i.name),cat:i.cat||'',tags:Array.isArray(i.tags)?i.tags:[],qty:Number.isFinite(+i.qty)&&+i.qty>=0?Math.floor(+i.qty):1,created:i.created||Date.now(),_img:i.image||''}))};
+  if(confirm('Replace your current inventory with this file?\n\nOK = replace everything\nCancel = merge it into what you have')){S={categories:clean.categories,tags:clean.tags,items:clean.items.map(({_img,...r})=>r)}}
+  else{
+    for(const k of['categories','tags'])clean[k].forEach(x=>{const j=S[k].findIndex(y=>y.id===x.id);j<0?S[k].push(x):S[k][j]=x});
+    clean.items.forEach(({_img,...x})=>{const j=S.items.findIndex(y=>y.id===x.id);j<0?S.items.push(x):S.items[j]=x});
+  }
+  const base=n=>n.split('/').pop().replace(/\.[^.]+$/,'');
+  const byId={};impFiles.forEach(f=>{byId[base(f.name)]=f});
+  let n=0;
+  for(const it of clean.items){
+    const f=byId[it.id]||(it._img&&byId[base(it._img)]);
+    if(f){const img=await shrink(f);if(img){IMG[it.id]=img;await imgPut(it.id,img);n++}}
+  }
+  save();render();$('#imv').hidden=true;
+  alert('Imported '+clean.items.length+' items and '+n+' pictures.');
 };
 
 /* ---------- start ---------- */
