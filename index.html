@@ -75,7 +75,7 @@ input[type=color]{width:52px;height:44px;padding:3px;flex:none}
     <img class="pv" id="pv" alt="Item photo. Tap to retake.">
     <div class="hint">Tap the photo to retake it.</div>
     <label for="nm">Name</label>
-    <input id="nm" placeholder="e.g. Winter jacket" autocomplete="off">
+    <input id="nm" placeholder="e.g. Winter Jacket" autocomplete="off" autocapitalize="words" enterkeyhint="done">
     <label for="qn">Quantity</label>
     <div class="row"><button id="qm" aria-label="Decrease">&minus;</button><input id="qn" type="number" inputmode="numeric" min="0" value="1" style="text-align:center;width:90px"><button id="qp" aria-label="Increase">+</button></div>
     <label for="cs">Category</label>
@@ -130,6 +130,7 @@ function shrink(file){return new Promise(res=>{const u=URL.createObjectURL(file)
 const tagById=id=>S.tags.find(t=>t.id===id);
 const catById=id=>S.categories.find(c=>c.id===id);
 function fg(hex){const n=parseInt(hex.slice(1),16),r=n>>16,g=(n>>8)&255,b=n&255;return (.299*r+.587*g+.114*b)>150?'#111':'#fff'}
+const cap=s=>s.replace(/(^|\s)(\S)/g,(m,a,b)=>a+b.toUpperCase());
 const chip=(t,extra='',off=false)=>`<span class="chip ${extra}${off?' off':''}" data-id="${t.id}" style="background:${t.color};color:${fg(t.color)}">${esc(t.name)}</span>`;
 
 /* ---------- main list ---------- */
@@ -162,15 +163,19 @@ $('#bAdd').onclick=()=>{camMode='new';$('#cam').value='';$('#cam').click()};
 $('#pv').onclick=()=>{camMode='retake';$('#cam').value='';$('#cam').click()};
 $('#cam').onchange=async e=>{
   const f=e.target.files[0];if(!f)return;
-  const img=await shrink(f);if(!img){alert('That photo could not be read. Try again.');return}
-  if(camMode==='new'){openSheet(null,img)}else{D.img=img;$('#pv').src=img}
+  // open the sheet and focus the name field right away (inside the user gesture) so iOS shows the keyboard
+  if(camMode==='new')openSheet(null,null);
+  const d=D,p=shrink(f);d.pending=p;
+  const img=await p;d.pending=null;
+  if(!img){alert('That photo could not be read. Try again.');if(D===d&&d.isNew){$('#sheet').hidden=true;D=null}return}
+  d.img=img;if(D===d)$('#pv').src=img;
 };
 function openSheet(item,img){
   D=item?{id:item.id,name:item.name,cat:item.cat||'',tags:[...item.tags],qty:item.qty??1,img:IMG[item.id]||null,isNew:false}
         :{id:uid(),name:'',cat:F.cat&&F.cat!=='_none'?F.cat:'',tags:[...F.tags],qty:1,img:img,isNew:true};
   $('#nm').value=D.name;$('#qn').value=D.qty;$('#pv').src=D.img||'';$('#del').style.visibility=item?'visible':'hidden';
   fillCats();fillTags();$('#sheet').hidden=false;
-  if(!item)setTimeout(()=>$('#nm').focus(),50);
+  if(!item){$('#nm').focus();setTimeout(()=>$('#nm').focus(),60)}
 }
 function fillCats(){$('#cs').innerHTML='<option value="">Uncategorized</option>'+S.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');$('#cs').value=D.cat}
 function fillTags(){$('#tg').innerHTML=S.tags.length?S.tags.map(t=>chip(t,'',!D.tags.includes(t.id))).join(''):'<span class="hint">No tags yet. Create one below.</span>'}
@@ -187,10 +192,17 @@ $('#ta').onclick=()=>{
   if(!D.tags.includes(t.id))D.tags.push(t.id);
   $('#tn').value='';fillTags();
 };
+$('#nm').addEventListener('keydown',e=>{
+  if(e.key!=='Enter')return;
+  e.preventDefault();
+  if(!$('#nm').value.trim())return;
+  $('#nm').blur();$('#ok').click();
+});
 $('#cancel').onclick=()=>{$('#sheet').hidden=true;D=null};
 $('#ok').onclick=async()=>{
-  const name=$('#nm').value.trim();
+  const name=cap($('#nm').value.trim());
   if(!name){$('#nm').focus();return}
+  if(D.pending)await D.pending;
   let it=S.items.find(i=>i.id===D.id);
   if(!it){it={id:D.id,created:Date.now()};S.items.push(it)}
   let q=parseInt($('#qn').value);if(isNaN(q)||q<0)q=1;
