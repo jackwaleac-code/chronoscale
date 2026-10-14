@@ -17,6 +17,7 @@ button{border:1px solid var(--line);background:var(--panel);border-radius:10px;p
 button.pri{background:var(--acc);color:var(--accfg);border-color:var(--acc);font-weight:600}
 button.dng{color:var(--danger)}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+input[type=search]{-webkit-appearance:none;appearance:none}
 input,select{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:10px 12px;width:100%}
 .bar{padding:6px 16px;display:flex;flex-direction:column;gap:8px}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
@@ -56,6 +57,7 @@ input[type=color]{width:52px;height:44px;padding:3px;flex:none}
 </header>
 
 <div class="bar">
+  <input type="search" id="q" placeholder="Search items" autocomplete="off" autocapitalize="off" enterkeyhint="search" aria-label="Search items">
   <select id="fCat" aria-label="Filter by category"></select>
   <div class="chips" id="fTags"></div>
 </div>
@@ -122,7 +124,7 @@ let S={categories:[],tags:[],items:[]};
 try{const d=JSON.parse(localStorage.getItem('inv')||'null');if(d)S=Object.assign(S,d)}catch(e){}
 const save=()=>{try{localStorage.setItem('inv',JSON.stringify(S))}catch(e){alert('Could not save data on this device.')}};
 const IMG={};           // id -> dataURL (kept out of the JSON export)
-let db=null,F={cat:'',tags:[]},D=null,camMode='new';
+let db=null,F={cat:'',tags:[],q:''},D=null,camMode='new';
 
 /* ---------- image storage (IndexedDB, this device only) ---------- */
 function openDB(){return new Promise(r=>{try{const q=indexedDB.open('inv_img',1);q.onupgradeneeded=()=>q.result.createObjectStore('i');q.onsuccess=()=>{db=q.result;r()};q.onerror=()=>r()}catch(e){r()}})}
@@ -139,6 +141,11 @@ const cap=s=>s.replace(/(^|\s)(\S)/g,(m,a,b)=>a+b.toUpperCase());
 const chip=(t,extra='',off=false)=>`<span class="chip ${extra}${off?' off':''}" data-id="${t.id}" style="background:${t.color};color:${fg(t.color)}">${esc(t.name)}</span>`;
 
 /* ---------- main list ---------- */
+function hit(i){
+  const q=F.q.trim().toLowerCase();if(!q)return true;
+  const hay=[i.name,catById(i.cat)?catById(i.cat).name:'',...i.tags.map(t=>tagById(t)?tagById(t).name:'')].join(' ').toLowerCase();
+  return q.split(/\s+/).every(w=>hay.includes(w));
+}
 function render(){
   const fc=$('#fCat');
   fc.innerHTML='<option value="">All categories</option>'+S.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')+'<option value="_none">Uncategorized</option>';
@@ -146,7 +153,7 @@ function render(){
   fc.value=F.cat;
   F.tags=F.tags.filter(id=>tagById(id));
   $('#fTags').innerHTML=S.tags.map(t=>chip(t,'',!F.tags.includes(t.id)&&F.tags.length>0)).join('');
-  const items=S.items.filter(i=>(!F.cat||(F.cat==='_none'?!i.cat||!catById(i.cat):i.cat===F.cat))&&F.tags.every(t=>i.tags.includes(t)))
+  const items=S.items.filter(i=>(!F.cat||(F.cat==='_none'?!i.cat||!catById(i.cat):i.cat===F.cat))&&F.tags.every(t=>i.tags.includes(t))&&hit(i))
     .sort((a,b)=>(b.created||0)-(a.created||0));
   $('#count').textContent=items.length+' of '+S.items.length+' items';
   $('#list').innerHTML=items.length?items.map(i=>`<div class="item" data-id="${i.id}">
@@ -156,6 +163,8 @@ function render(){
     <div class="stp"><button data-d="-1" data-i="${i.id}" aria-label="Decrease quantity">&minus;</button><span>${i.qty??1}</span><button data-d="1" data-i="${i.id}" aria-label="Increase quantity">+</button></div></div>`).join('')
     :`<div class="empty">${S.items.length?'No items match these filters.':'Nothing here yet. Tap Add item and take a photo.'}</div>`;
 }
+$('#q').oninput=e=>{F.q=e.target.value;render()};
+$('#q').onkeydown=e=>{if(e.key==='Enter')e.target.blur()};
 $('#fCat').onchange=e=>{F.cat=e.target.value;render()};
 $('#fTags').onclick=e=>{const c=e.target.closest('.chip');if(!c)return;const id=c.dataset.id;F.tags=F.tags.includes(id)?F.tags.filter(x=>x!==id):[...F.tags,id];render()};
 $('#list').onclick=e=>{
